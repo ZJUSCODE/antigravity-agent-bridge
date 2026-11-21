@@ -204,6 +204,29 @@ export function queryAntigravityWorkspaceIndex() {
   }
 }
 
+export function findMirroredHubConvInDb(projectId, exactTitle) {
+  if (!projectId || !exactTitle) return null;
+  const appData = process.env.ANTIGRAVITY_APP_DATA_DIR || join(homedir(), '.gemini', 'antigravity');
+  const dbPath = join(appData, 'conversation_summaries.db');
+  if (!existsSync(dbPath)) return null;
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true, timeout: 1000 });
+    const row = db.prepare(`
+      SELECT conversation_id
+      FROM conversation_summaries
+      WHERE project_id = ? AND title = ?
+      ORDER BY last_modified_time DESC
+      LIMIT 1
+    `).get(projectId, exactTitle);
+    return row?.conversation_id || null;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
 export async function resolveCodexServerProjectViaRpc(sendRpcFn, chosenCwd) {
   const normCwd = normalizeDirPath(chosenCwd);
   if (!isUserProjectFolder(normCwd)) return null;

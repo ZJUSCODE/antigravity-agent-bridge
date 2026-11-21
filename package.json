@@ -1,6 +1,6 @@
 {
   "name": "codex-bridge",
-  "version": "3.3.0",
+  "version": "3.4.1",
   "private": true,
   "description": "Enterprise Antigravity <-> OpenAI Codex Native Aux-Pane Sidecar & Dual-AI Roundtable Plugin",
   "type": "module",

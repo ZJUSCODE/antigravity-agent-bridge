@@ -705,6 +705,18 @@
   });
   titleInput.addEventListener('blur', () => commitToolbarRename(true));
 
+  $('btn-open-codex')?.addEventListener('click', async () => {
+    try {
+      await apiPost('/api/open-in-codex', {
+        conversationId: hostConvId(),
+        roomId: state.roomId || undefined,
+      });
+      showToast('正在唤醒 OpenAI Codex 桌面端打开此线程…');
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
   $('btn-export').addEventListener('click', async () => {
     try {
       const res = await apiPost('/api/export', {
@@ -1367,6 +1379,11 @@
 
     const modeInfo = MODE_OPTIONS.find((m) => m.id === meta.mode) || MODE_OPTIONS[0];
     $('mode-label').textContent = modeInfo.short;
+
+    const openCodexBtn = $('btn-open-codex');
+    if (openCodexBtn) {
+      openCodexBtn.classList.toggle('hidden', !meta.codexThreadId);
+    }
 
     // Telemetry badge (Tokens / Quota)
     const telEl = $('toolbar-telemetry');

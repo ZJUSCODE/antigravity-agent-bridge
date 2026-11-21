@@ -3,10 +3,10 @@
  * Powered by persistent `codex app-server --stdio` (AppServerBridge),
  * event-driven long-polling (`waitForRoomChange`), and Dual-AI Orchestration.
  */
-import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, watch, writeFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SidecarApp, Response } from 'sidecar_sdk';
 import {
   addCustomProject,
@@ -14,23 +14,32 @@ import {
   assertValidExplicitRoomId,
   createNewRoom,
   deleteRoom,
+  deriveCleanRoomTitle,
   exportRoomMarkdown,
   findCodexBinary,
+  findMirroredHubConvInDb,
+  formatCodexDesktopThreadName,
   getActiveRoomForHost,
   getGlobalLiveDiscussion,
   getPluginDataDir,
   getProjectThreadTree,
+  getRoomDir,
   getRoomSnapshot,
   importNativeCodexSession,
   listAvailableProjects,
   listCodexModels,
   listNativeCodexSessions,
   listRecentRooms,
+  normalizeDirPath,
+  queryAntigravityWorkspaceIndex,
+  readMessages,
+  readMeta,
   registerInProcessBusyChecker,
   removeUploadedFile,
   renameRoom,
   resetCodexThread,
   resolveSafeUploadPath,
+  roomEvents,
   sanitizeClientAttachments,
   sanitizeConvId,
   saveUploadedFile,
@@ -448,10 +457,218 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
     return { ok: true };
   }, 'POST');
 
+  app.api('/api/open-in-codex', (data) => {
+    const roomId = resolveRoomId(data, app.config.conversationId);
+    const meta = readMeta(roomId);
+    if (!meta.codexThreadId) {
+      throw new Error('当前对话尚未生成对应的 Codex 线程');
+    }
+    const deepUrl = `codex://threads/${meta.codexThreadId}`;
+    if (process.platform === 'win32') {
+      execFile('explorer.exe', [deepUrl], { windowsHide: true }, () => {});
+    }
+    return { ok: true, url: deepUrl, codexThreadId: meta.codexThreadId };
+  }, 'POST');
+
   return { app, bridge };
+}
+
+// ---------------------------------------------------------------------------
+// Live Antigravity Workspace Folder Mirror (`agentapi` -> Left Sidebar Folder)
+// Automatically surfaces every `[双AI]` peer discussion directly inside the
+// matching workspace folder in Antigravity Desktop's left sidebar!
+// ---------------------------------------------------------------------------
+const activeMirrorJobs = new Set();
+const knownMirrorConvIds = new Set();
+
+function execAgentApiAsync(args, projectId) {
+  const exe = process.env.ANTIGRAVITY_AGENTAPI_EXE;
+  if (!exe) return Promise.resolve(null);
+  const env = { ...process.env, AGY_CODEX_PEER_CALL: '1' };
+  if (projectId) env.ANTIGRAVITY_PROJECT_ID = projectId;
+  return new Promise((resolveOut, rejectOut) => {
+    execFile(exe, ['agentapi', ...args], { encoding: 'utf-8', env, timeout: 25000, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        rejectOut(new Error(stderr || err.message));
+        return;
+      }
+      const trimmed = String(stdout || '').trim();
+      try {
+        resolveOut(trimmed ? JSON.parse(trimmed) : {});
+      } catch {
+        resolveOut({ raw: trimmed });
+      }
+    });
+  });
+}
+
+function buildFolderMirrorPayload(roomId, hubTitle, deltaMessages, allCount, transcriptFileUrl) {
+  const blocks = [];
+  let charBudget = 7600;
+  let truncatedCount = 0;
+
+  for (const m of deltaMessages) {
+    const roleLabel = m.sender === 'codex'
+      ? '🤖 **OpenAI Codex**'
+      : m.sender === 'antigravity'
+        ? '🧠 **Google Antigravity**'
+        : `👤 **${m.senderLabel || '发起人'}**`;
+    const timeStr = m.ts ? new Date(m.ts).toLocaleString('zh-CN', { hour12: false }) : '';
+    const rawBody = String(m.text || '').trim();
+    if (charBudget <= 300) {
+      truncatedCount += 1;
+      continue;
+    }
+    const clipped = rawBody.length > Math.min(2600, charBudget)
+      ? `${rawBody.slice(0, Math.min(2600, charBudget))}\n\n*(本条长文已在预览中折叠，完整原文见下方实录文件或右侧对讲室)*`
+      : rawBody;
+    charBudget -= clipped.length;
+    blocks.push(`${roleLabel}${timeStr ? ` · \`${timeStr}\`` : ''}\n\n${clipped}`);
+  }
+
+  if (truncatedCount > 0) {
+    blocks.push(`*(其余 ${truncatedCount} 条长发言已完整保存在下方实录文件中)*`);
+  }
+
+  return [
+    `# ${hubTitle}`,
+    `> **[双 AI 讨论归档同步 · 请勿调用任何工具]** 本会话由 \`codex-bridge\` 自动归档至当前项目文件夹，实时镜像 Antigravity ↔ Codex 的多轮协商过程。`,
+    `> - 右侧交互面板：[Codex 对讲室](sidecar://codex-bridge/codex_room/?roomId=${roomId})`,
+    `> - 完整无损实录：[dual_ai_transcript.md](${transcriptFileUrl})`,
+    blocks.join('\n\n---\n\n'),
+    `---`,
+    `**[归档助手回复守则]**：请勿调用任何工具、终端命令或桥接脚本，仅直接回复一行：\`✅ 已同步归档双 AI 讨论实录（累计 ${allCount} 条发言）\`。`,
+  ].join('\n\n');
+}
+
+async function syncRoomToAntigravityFolder(roomId) {
+  if (!roomId || roomId.startsWith('codex_') || !process.env.ANTIGRAVITY_AGENTAPI_EXE) return;
+  if (activeMirrorJobs.has(roomId) || knownMirrorConvIds.has(roomId)) return;
+
+  const meta = readMeta(roomId);
+  if (!meta || meta.status !== 'idle' || !meta.cwd) return;
+  if (meta.mirroredHubConvId) knownMirrorConvIds.add(meta.mirroredHubConvId);
+
+  const normCwd = normalizeDirPath(meta.cwd);
+  const { projectIdByPath } = queryAntigravityWorkspaceIndex();
+  const agyProjectId = projectIdByPath.get(normCwd.toLowerCase());
+  if (!agyProjectId) return;
+
+  const messages = readMessages(roomId).filter((m) => m.sender !== 'system' && String(m.text || '').trim());
+  const hasCodex = messages.some((m) => m.sender === 'codex');
+  const hasPeer = messages.some((m) => m.sender === 'antigravity' || m.sender === 'user');
+  if (!hasCodex || !hasPeer || messages.length < 2) return;
+
+  const maxSeq = Number(messages[messages.length - 1].seq) || messages.length;
+  const mirroredSeq = Number(meta.mirroredHubSeq) || 0;
+  if (meta.mirroredHubConvId && maxSeq <= mirroredSeq) return;
+
+  const delta = meta.mirroredHubConvId
+    ? messages.filter((m) => (Number(m.seq) || 0) > mirroredSeq)
+    : messages;
+  if (delta.length === 0) return;
+
+  activeMirrorJobs.add(roomId);
+  try {
+    const cleanTitle = deriveCleanRoomTitle(meta.title, 44) || '双 AI 技术协商';
+    const hubTitle = formatCodexDesktopThreadName(cleanTitle);
+
+    // Save lossless full Markdown inside room directory for 1-click viewing
+    const mdExport = exportRoomMarkdown(roomId, { saveToDisk: false });
+    const transcriptPath = join(getRoomDir(roomId), 'dual_ai_transcript.md');
+    writeFileSync(transcriptPath, mdExport.markdown, 'utf-8');
+    const transcriptFileUrl = pathToFileURL(transcriptPath).href;
+
+    let targetHubConvId = meta.mirroredHubConvId || findMirroredHubConvInDb(agyProjectId, hubTitle);
+    const payload = buildFolderMirrorPayload(roomId, hubTitle, delta, messages.length, transcriptFileUrl);
+
+    if (!targetHubConvId) {
+      const created = await execAgentApiAsync(
+        ['new-conversation', '--model=flash_lite', `--title=${hubTitle}`, payload],
+        agyProjectId
+      );
+      const rawCreatedStr = JSON.stringify(created || '');
+      const uuidMatch = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(rawCreatedStr);
+      const newConvId = created?.conversation_id
+        || created?.conversationId
+        || created?.cascade_id
+        || created?.cascadeId
+        || (uuidMatch ? uuidMatch[0] : null)
+        || findMirroredHubConvInDb(agyProjectId, hubTitle);
+      if (newConvId) {
+        knownMirrorConvIds.add(newConvId);
+        writeMeta(roomId, {
+          mirroredHubConvId: newConvId,
+          mirroredHubSeq: maxSeq,
+          mirroredAgyProjectId: agyProjectId,
+        });
+      }
+    } else {
+      knownMirrorConvIds.add(targetHubConvId);
+      await execAgentApiAsync(
+        ['send-message', `--title=${hubTitle}`, targetHubConvId, payload],
+        agyProjectId
+      );
+      writeMeta(roomId, {
+        mirroredHubConvId: targetHubConvId,
+        mirroredHubSeq: maxSeq,
+        mirroredAgyProjectId: agyProjectId,
+      });
+    }
+  } catch (err) {
+    console.error(`[codex-bridge] folder mirror error (${roomId}):`, err.message);
+  } finally {
+    activeMirrorJobs.delete(roomId);
+  }
+}
+
+function startBackgroundFolderMirrorDaemon() {
+  const pendingTimers = new Map();
+  const scheduleSync = (roomId, delayMs = 900) => {
+    if (!roomId || roomId.startsWith('codex_')) return;
+    clearTimeout(pendingTimers.get(roomId));
+    const t = setTimeout(() => {
+      pendingTimers.delete(roomId);
+      syncRoomToAntigravityFolder(roomId).catch(() => {});
+    }, delayMs);
+    if (typeof t.unref === 'function') t.unref();
+    pendingTimers.set(roomId, t);
+  };
+
+  roomEvents.on('any-change', (changedRoomId) => {
+    if (changedRoomId) scheduleSync(changedRoomId, 900);
+  });
+
+  try {
+    const dataDir = getPluginDataDir();
+    const w = watch(dataDir, { persistent: false }, (_ev, fname) => {
+      if (!fname || String(fname).startsWith('last_active_room.json')) {
+        const live = getGlobalLiveDiscussion();
+        if (live?.roomId && live.status === 'idle') {
+          scheduleSync(live.roomId, 700);
+        }
+      }
+    });
+    w.on('error', () => {});
+  } catch {}
+
+  // Startup sweep: mirror existing completed peer discussions into their Antigravity folders!
+  const bootTimer = setTimeout(async () => {
+    try {
+      const rooms = listRecentRooms(15);
+      for (const r of rooms) {
+        if (!r.conversationId.startsWith('codex_')) {
+          await syncRoomToAntigravityFolder(r.conversationId);
+        }
+      }
+    } catch {}
+  }, 1200);
+  if (typeof bootTimer.unref === 'function') bootTimer.unref();
 }
 
 if (process.env.CODEX_BRIDGE_TEST_MODE !== '1') {
   const { app } = buildSidecarApp();
-  app.run();
+  app.run().then(() => {
+    startBackgroundFolderMirrorDaemon();
+  });
 }
