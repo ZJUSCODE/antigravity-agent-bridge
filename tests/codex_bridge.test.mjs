@@ -43,6 +43,7 @@ mkdirSync(fakeProjectB, { recursive: true });
 
 const core = await import('../sidecars/codex_room/codex_core.mjs');
 const { AppServerBridge } = await import('../sidecars/codex_room/app_server_bridge.mjs');
+const providers = await import('../sidecars/codex_room/agent_providers.mjs');
 
 // On clean CI runners without local Codex/Antigravity apps installed, seed lightweight binary stubs
 try {
@@ -586,5 +587,76 @@ describe('codex-bridge enterprise core & bridge suite', () => {
       'utf-8'
     );
     assert.equal(core.resolveDefaultCodexModel(), 'o3-pro-custom');
+  });
+
+  it('streams Pi JSONL and Claude stream-json protocols and persists multi-agent session IDs', async () => {
+    const fakePiJs = join(tmpRoot, 'mock-pi.mjs');
+    writeFileSync(
+      fakePiJs,
+      [
+        `const lines = [`,
+        `  { type: 'session', version: 3, id: 'pi-sess-9001' },`,
+        `  { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'Analyzing lock hierarchy...' } },`,
+        `  { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'grep', args: { pattern: 'mutex' } },`,
+        `  { type: 'tool_execution_end', toolCallId: 'c1', toolName: 'grep', result: { content: [{ type: 'text', text: 'codex_core.mjs:520' }] }, isError: false, durationMs: 12 },`,
+        `  { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: 'Pi verified: zero deadlock risk.' } },`,
+        `  { type: 'message_end', message: { role: 'assistant', usage: { totalTokens: 320 }, content: [{ type: 'text', text: 'Pi verified: zero deadlock risk. [PEER_VERDICT: PASS]' }] } }`,
+        `];`,
+        `for (const l of lines) process.stdout.write(JSON.stringify(l) + '\\n');`,
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const fakeClaudeJs = join(tmpRoot, 'mock-claude.mjs');
+    writeFileSync(
+      fakeClaudeJs,
+      [
+        `const lines = [`,
+        `  { type: 'system', subtype: 'init', session_id: 'claude-sess-777' },`,
+        `  { type: 'stream_event', session_id: 'claude-sess-777', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Claude review complete.' } } },`,
+        `  { type: 'result', subtype: 'success', session_id: 'claude-sess-777', is_error: false, result: 'Claude review complete: clean architecture. [PEER_VERDICT: PASS]' }`,
+        `];`,
+        `for (const l of lines) process.stdout.write(JSON.stringify(l) + '\\n');`,
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const prevPi = process.env.PI_BIN;
+    const prevClaude = process.env.CLAUDE_BIN;
+    process.env.PI_BIN = fakePiJs;
+    process.env.CLAUDE_BIN = fakeClaudeJs;
+
+    try {
+      const piTurn = await providers.runAgentTurn({
+        convId: 'room_multi_agent',
+        agentId: 'pi',
+        prompt: 'Audit concurrency locks',
+        cwd: fakeProjectA,
+      });
+      assert.equal(piTurn.agentId, 'pi');
+      assert.equal(piTurn.sessionId, 'pi-sess-9001');
+      assert.match(piTurn.reply, /Pi verified: zero deadlock risk/);
+      assert.equal(piTurn.steps.length, 1);
+      assert.equal(core.readMeta('room_multi_agent').agentSessions.pi, 'pi-sess-9001');
+
+      // Run parallel Multi-Agent Council across Pi + Claude simultaneously!
+      const council = await providers.runCouncilTurn({
+        convId: 'room_council_test',
+        agents: ['pi', 'claude'],
+        prompt: 'Run parallel architecture review',
+        cwd: fakeProjectA,
+      });
+      assert.equal(council.council, true);
+      assert.equal(council.results.length, 2);
+      assert.ok(council.results.every((r) => r.ok));
+
+      const councilMsgs = core.readMessages('room_council_test');
+      assert.equal(councilMsgs.length, 3, '1 initiator prompt + 2 parallel agent replies');
+      assert.ok(councilMsgs.some((m) => m.sender === 'pi' && m.text.includes('Pi verified')));
+      assert.ok(councilMsgs.some((m) => m.sender === 'claude' && m.text.includes('Claude review complete')));
+    } finally {
+      if (prevPi) process.env.PI_BIN = prevPi; else delete process.env.PI_BIN;
+      if (prevClaude) process.env.CLAUDE_BIN = prevClaude; else delete process.env.CLAUDE_BIN;
+    }
   });
 });

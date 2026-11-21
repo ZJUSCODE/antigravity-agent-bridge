@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * Cross-Platform One-Click Installer (`npm run setup`).
+ * Cross-Platform Universal Multi-Agent Installer (`npm run setup`).
  * Compatible with Windows, macOS, and Linux (WSL included).
  *
- * 1. Syncs `codex-bridge` into `~/.gemini/config/plugins/codex-bridge` (if cloned elsewhere).
- * 2. Syncs `codex-skill/antigravity-chat` into `~/.codex/skills/antigravity-chat`.
- * 3. Idempotently installs or upgrades the Antigravity Peer Exchange rule block in `~/.codex/AGENTS.md`.
+ * 1. Syncs plugin into `~/.gemini/config/plugins/codex-bridge` (if cloned elsewhere).
+ * 2. Syncs reverse `antigravity-chat` skill into OpenAI Codex (`~/.codex/skills/`),
+ *    and automatically into Pi (`~/.pi/agent/skills/`) & Claude Code (`~/.claude/skills/`) if installed.
+ * 3. Idempotently installs/updates the Antigravity Peer Exchange rule block in `~/.codex/AGENTS.md`.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -40,16 +41,24 @@ if (!samePath(repoRoot, targetPluginDir)) {
   console.log(`[setup] Antigravity plugin already in place -> ${targetPluginDir}`);
 }
 
-// 2. Sync OpenAI Codex skill (`~/.codex/skills/antigravity-chat`)
+// 2. Sync reverse `antigravity-chat` skill into Codex (always) + Pi & Claude Code (when detected)
+const srcPeerSkill = join(repoRoot, 'codex-skill', 'antigravity-chat');
 const codexHome = process.env.CODEX_HOME || join(home, '.codex');
-const srcCodexSkill = join(repoRoot, 'codex-skill', 'antigravity-chat');
-const dstCodexSkill = join(codexHome, 'skills', 'antigravity-chat');
-if (existsSync(srcCodexSkill)) {
-  if (!dryRun) {
-    mkdirSync(dirname(dstCodexSkill), { recursive: true });
-    cpSync(srcCodexSkill, dstCodexSkill, { recursive: true });
+const peerSkillTargets = [
+  { label: 'OpenAI Codex', rootExists: true, dest: join(codexHome, 'skills', 'antigravity-chat') },
+  { label: 'Pi Agent', rootExists: existsSync(join(home, '.pi')), dest: join(home, '.pi', 'agent', 'skills', 'antigravity-chat') },
+  { label: 'Claude Code', rootExists: existsSync(join(home, '.claude')), dest: join(home, '.claude', 'skills', 'antigravity-chat') },
+];
+
+if (existsSync(srcPeerSkill)) {
+  for (const tgt of peerSkillTargets) {
+    if (!tgt.rootExists) continue;
+    if (!dryRun) {
+      mkdirSync(dirname(tgt.dest), { recursive: true });
+      cpSync(srcPeerSkill, tgt.dest, { recursive: true });
+    }
+    console.log(`[setup] Synced ${tgt.label} peer skill -> ${tgt.dest}${dryRun ? ' (dry-run)' : ''}`);
   }
-  console.log(`[setup] Synced Codex skill -> ${dstCodexSkill}${dryRun ? ' (dry-run)' : ''}`);
 }
 
 // 3. Idempotently install or update peer rule block in `~/.codex/AGENTS.md`
@@ -90,4 +99,4 @@ if (existingAgents.includes(beginMarker) && existingAgents.includes(endMarker)) 
   console.log(`[setup] Added Antigravity peer exchange block -> ${codexAgentsMd}${dryRun ? ' (dry-run)' : ''}`);
 }
 
-console.log('[setup] Done! Run `npm run doctor` anytime to verify local binaries and environment.');
+console.log('[setup] Done! Run `npm run doctor` anytime to inspect all detected coding agents.');

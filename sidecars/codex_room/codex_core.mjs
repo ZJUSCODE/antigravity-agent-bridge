@@ -985,6 +985,8 @@ function buildFallbackMeta(safeConv) {
     importSourceSessionId: null,
     codexThreadId: null,
     agyConversationId: null,
+    activeAgent: 'codex',
+    agentSessions: {},
     needsForkOnNextTurn: false,
     forkFromSessionId: null,
     model: resolveDefaultCodexModel(),
@@ -1388,7 +1390,7 @@ export function getRoomSnapshot(convId) {
         (meta.activeTurn.pendingApprovals || []).map((p) => String(p.rpcId)).join(','),
       ].join('|')
     : 'idle';
-  const etag = `${safeConv}:${meta.rev || 0}:${meta.roomEpoch || 1}:${meta.status}:${meta.title}:${meta.pinned ? 1 : 0}:${meta.model}:${meta.effort}:${meta.approvalPolicy}:${meta.mode}:${meta.cwd || ''}:${meta.codexThreadId || 'none'}:${lastSeq}:${activeKey}:${meta.updatedAt}`;
+  const etag = `${safeConv}:${meta.rev || 0}:${meta.roomEpoch || 1}:${meta.status}:${meta.title}:${meta.pinned ? 1 : 0}:${meta.activeAgent || 'codex'}:${meta.model}:${meta.effort}:${meta.approvalPolicy}:${meta.mode}:${meta.cwd || ''}:${meta.codexThreadId || 'none'}:${lastSeq}:${activeKey}:${meta.updatedAt}`;
   return {
     conversationId: safeConv,
     meta,
@@ -1459,6 +1461,8 @@ export function createNewRoom({ cwd, model, effort, mode, approvalPolicy } = {})
     messageCount: 0,
     codexThreadId: null,
     agyConversationId: null,
+    activeAgent: 'codex',
+    agentSessions: {},
     needsForkOnNextTurn: false,
     forkFromSessionId: null,
     model: model || resolveDefaultCodexModel(),

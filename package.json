@@ -1,19 +1,27 @@
 {
-  "name": "codex-bridge",
-  "version": "4.0.1",
+  "name": "antigravity-agent-bridge",
+  "version": "5.0.0",
   "license": "MIT",
-  "description": "Native Antigravity Aux-Pane Sidecar & Symmetric Dual-Agent Orchestration Plugin for Google Antigravity <-> OpenAI Codex",
+  "description": "Universal Multi-Agent Aux-Pane Roundtable & Peer Orchestration Plugin for Google Antigravity — Connect OpenAI Codex, Pi Agent, Claude Code, Gemini CLI, OpenCode & Custom CLI Agents",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ZJUSCODE/antigravity-codex-bridge.git"
+    "url": "https://github.com/ZJUSCODE/antigravity-agent-bridge.git"
   },
-  "homepage": "https://github.com/ZJUSCODE/antigravity-codex-bridge",
+  "homepage": "https://github.com/ZJUSCODE/antigravity-agent-bridge",
   "keywords": [
     "antigravity",
     "antigravity-plugin",
+    "claude-code",
     "openai-codex",
+    "codex",
+    "pi-agent",
+    "gemini-cli",
+    "opencode",
     "multi-agent",
+    "ai-agents",
+    "ai-coding",
     "code-review",
+    "agent-orchestration",
     "sidecar"
   ],
   "type": "module",
@@ -25,6 +33,6 @@
     "uninstall-bridge": "node scripts/uninstall.mjs",
     "doctor": "node scripts/doctor.mjs",
     "test": "node --test tests/codex_bridge.test.mjs",
-    "check": "node --check sidecars/codex_room/codex_core.mjs && node --check sidecars/codex_room/app_server_bridge.mjs && node --check sidecars/codex_room/main.mjs && node --check sidecars/codex_room/app.js && node --check skills/codex-chat/scripts/talk_codex.mjs && node --check codex-skill/antigravity-chat/scripts/talk_antigravity.mjs && node --check scripts/install.mjs && node --check scripts/uninstall.mjs && node --check scripts/doctor.mjs"
+    "check": "node --check sidecars/codex_room/codex_core.mjs && node --check sidecars/codex_room/agent_providers.mjs && node --check sidecars/codex_room/app_server_bridge.mjs && node --check sidecars/codex_room/main.mjs && node --check sidecars/codex_room/app.js && node --check skills/agent-bridge/scripts/talk_agent.mjs && node --check skills/codex-chat/scripts/talk_codex.mjs && node --check codex-skill/antigravity-chat/scripts/talk_antigravity.mjs && node --check scripts/install.mjs && node --check scripts/uninstall.mjs && node --check scripts/doctor.mjs"
   }
 }

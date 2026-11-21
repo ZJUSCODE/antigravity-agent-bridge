@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-label="Antigravity Agent Bridge Architecture Banner">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1419"/>
+      <stop offset="100%" stop-color="#171e26"/>
+    </linearGradient>
+    <linearGradient id="accentBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3794ff"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="960" height="300" rx="16" fill="url(#bgGrad)"/>
+  <rect x="1" y="1" width="958" height="298" rx="15" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1.5"/>
+
+  <!-- Subtle Grid Dots -->
+  <g fill="rgba(255,255,255,0.05)">
+    <circle cx="40" cy="40" r="1.5"/><circle cx="80" cy="40" r="1.5"/><circle cx="120" cy="40" r="1.5"/>
+    <circle cx="40" cy="80" r="1.5"/><circle cx="80" cy="80" r="1.5"/><circle cx="120" cy="80" r="1.5"/>
+    <circle cx="840" cy="220" r="1.5"/><circle cx="880" cy="220" r="1.5"/><circle cx="920" cy="220" r="1.5"/>
+    <circle cx="840" cy="260" r="1.5"/><circle cx="880" cy="260" r="1.5"/><circle cx="920" cy="260" r="1.5"/>
+  </g>
+
+  <!-- Title & Tagline -->
+  <text x="48" y="64" fill="#f0f4f8" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="28" font-weight="700" letter-spacing="-0.4">Antigravity Agent Bridge</text>
+  <rect x="394" y="43" width="54" height="24" rx="6" fill="rgba(55,148,255,0.18)" stroke="rgba(55,148,255,0.45)"/>
+  <text x="421" y="59" text-anchor="middle" fill="#60a5fa" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="12" font-weight="600">v5.0</text>
+
+  <text x="48" y="94" fill="#94a3b8" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="14.5">Universal Multi-Agent Aux-Pane Roundtable &amp; Peer Orchestration Plugin for Google Antigravity</text>
+
+  <!-- Left Hub: Google Antigravity -->
+  <rect x="48" y="132" width="250" height="124" rx="12" fill="#1c2430" stroke="#3794ff" stroke-width="1.6"/>
+  <circle cx="74" cy="162" r="6" fill="#3794ff"/>
+  <text x="90" y="167" fill="#f8fafc" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="600">Google Antigravity</text>
+  <text x="68" y="195" fill="#94a3b8" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12.5">• Chief Architect &amp; Dispatcher</text>
+  <text x="68" y="216" fill="#94a3b8" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12.5">• Native Aux-Pane Sidecar UI</text>
+  <text x="68" y="237" fill="#94a3b8" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12.5">• 1:1 Theme &amp; Session Sync</text>
+
+  <!-- Center Bridge Bus -->
+  <line x1="298" y1="194" x2="404" y2="194" stroke="url(#accentBlue)" stroke-width="2.2" stroke-dasharray="5 4"/>
+  <rect x="318" y="176" width="70" height="36" rx="8" fill="#131a22" stroke="rgba(255,255,255,0.16)"/>
+  <text x="353" y="198" text-anchor="middle" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11.5" font-weight="600">JSON-RPC</text>
+
+  <!-- Right Agent Pills Grid -->
+  <!-- Row 1 -->
+  <rect x="412" y="126" width="164" height="58" rx="10" fill="#1b222c" stroke="rgba(16,163,127,0.55)"/>
+  <circle cx="432" cy="148" r="5" fill="#10a37f"/>
+  <text x="445" y="153" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="600">OpenAI Codex</text>
+  <text x="432" y="172" fill="#8b9bb0" font-family="ui-monospace, monospace" font-size="11">app-server stdio</text>
+
+  <rect x="588" y="126" width="164" height="58" rx="10" fill="#1b222c" stroke="rgba(139,92,246,0.55)"/>
+  <circle cx="608" cy="148" r="5" fill="#8b5cf6"/>
+  <text x="621" y="153" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="600">Pi Agent</text>
+  <text x="608" y="172" fill="#8b9bb0" font-family="ui-monospace, monospace" font-size="11">pi --mode json</text>
+
+  <rect x="764" y="126" width="152" height="58" rx="10" fill="#1b222c" stroke="rgba(217,119,87,0.55)"/>
+  <circle cx="784" cy="148" r="5" fill="#d97757"/>
+  <text x="797" y="153" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="600">Claude Code</text>
+  <text x="784" y="172" fill="#8b9bb0" font-family="ui-monospace, monospace" font-size="11">stream-json</text>
+
+  <!-- Row 2 -->
+  <rect x="412" y="198" width="164" height="58" rx="10" fill="#1b222c" stroke="rgba(79,134,247,0.55)"/>
+  <circle cx="432" cy="220" r="5" fill="#4f86f7"/>
+  <text x="445" y="225" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="600">Gemini CLI</text>
+  <text x="432" y="244" fill="#8b9bb0" font-family="ui-monospace, monospace" font-size="11">stream-json</text>
+
+  <rect x="588" y="198" width="164" height="58" rx="10" fill="#1b222c" stroke="rgba(20,184,166,0.55)"/>
+  <circle cx="608" cy="220" r="5" fill="#14b8a6"/>
+  <text x="621" y="225" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="600">OpenCode</text>
+  <text x="608" y="244" fill="#8b9bb0" font-family="ui-monospace, monospace" font-size="11">run --format json</text>
+
+  <rect x="764" y="198" width="152" height="58" rx="10" fill="#1b222c" stroke="rgba(255,255,255,0.22)"/>
+  <circle cx="784" cy="220" r="5" fill="#eab308"/>
+  <text x="797" y="225" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="600">Council / +Any</text>
+  <text x="784" y="244" fill="#8b9bb0" font-family="ui-monospace, monospace" font-size="11">Aider · Qwen · CLI</text>
+</svg>

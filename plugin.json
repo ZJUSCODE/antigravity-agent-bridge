@@ -1,17 +1,17 @@
 {
   "name": "codex-bridge",
-  "displayName": "Codex 对讲室",
-  "version": "4.0.1",
-  "description": "在 Antigravity 右侧辅助栏内嵌原生风格 Codex 协同对讲室（实时跟随宿主主题与当前对话），打通 Antigravity ↔ OpenAI Codex 双向协商、主从派工执行与对抗式代码互审。",
+  "displayName": "AI 协同对讲室",
+  "version": "5.0.0",
+  "description": "在 Antigravity 右侧辅助栏内嵌原生风格多智能体协同对讲室（实时跟随宿主主题与当前对话），一键连接并并行调度 OpenAI Codex、Pi Agent、Claude Code、Gemini CLI 与 OpenCode。",
   "logo": "assets/logo.svg",
-  "homepage": "https://github.com/ZJUSCODE/antigravity-codex-bridge",
+  "homepage": "https://github.com/ZJUSCODE/antigravity-agent-bridge",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ZJUSCODE/antigravity-codex-bridge.git"
+    "url": "https://github.com/ZJUSCODE/antigravity-agent-bridge.git"
   },
   "suggestedPrompts": [
-    "打开右侧 Codex 对讲室，和 Codex 自动讨论两轮当前方案的优缺点",
-    "你先定架构方案，定好后让 Codex 落盘写代码跑测试，你审查通过再交付",
-    "让 Codex 在对讲室里对当前未提交改动做一轮严格交叉 Code Review"
+    "打开右侧 AI 协同对讲室，开一轮圆桌群聊并行审查当前改动",
+    "你先定架构方案，然后派 Codex 和 Pi 并行写代码跑单测，你审查通过再交付",
+    "让 Claude Code 和 Codex 围绕这个模块的边界问题讨论两轮"
   ]
 }

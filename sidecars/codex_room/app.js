@@ -18,9 +18,9 @@
   ];
 
   const MODE_OPTIONS = [
-    { id: 'dual-2', short: '双AI 2轮', title: '双 AI 自动讨论 · 2 轮', desc: 'Antigravity 与 Codex 自动往返 2 轮并收敛结论' },
-    { id: 'dual-3', short: '双AI 3轮', title: '双 AI 自动讨论 · 3 轮', desc: '双方深入辩论与交叉审查 3 轮' },
-    { id: 'direct', short: '直连 Codex', title: '直连 Codex（流式单聊）', desc: '走常驻 app-server 逐字流式对话、弹窗审批与实时看 Diff' },
+    { id: 'dual-2', short: '协同 2轮', title: '多智能体自动协商 · 2 轮', desc: 'Antigravity 与所选智能体自动往返 2 轮并收敛结论' },
+    { id: 'dual-3', short: '协同 3轮', title: '多智能体深入辩论 · 3 轮', desc: '双方或多方深入推演与交叉审查 3 轮' },
+    { id: 'direct', short: '直连单聊', title: '直连当前所选智能体（或圆桌群聊）', desc: '直接向当前所选 Agent 发送消息并实时流式查看输出' },
   ];
 
   const CHECK_SVG = `<svg class="pop-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-6.5"/></svg>`;
@@ -52,6 +52,7 @@
     renderedRoomId: '',
     meta: null,
     messages: [],
+    agents: [],
     models: [],
     projects: [],
     drawerData: null,
@@ -512,6 +513,16 @@
   // ---------------------------------------------------------------------------
   // Catalog & Popovers
   // ---------------------------------------------------------------------------
+  function activeAgentObj() {
+    const curId = state.meta?.activeAgent || 'codex';
+    return state.agents.find((a) => a.id === curId) || state.agents[0] || { id: 'codex', shortName: 'Codex', displayName: 'OpenAI Codex', models: state.models };
+  }
+
+  function activeModelsList() {
+    const ag = activeAgentObj();
+    return (Array.isArray(ag?.models) && ag.models.length > 0) ? ag.models : state.models;
+  }
+
   async function loadCatalog() {
     try {
       let wsUris = [];
@@ -520,13 +531,14 @@
       }
       const q = wsUris.length ? `?workspaces=${encodeURIComponent(wsUris.join('|'))}` : '';
       const data = await apiGet(`/api/catalog${q}`);
+      state.agents = data.agents || [];
       state.models = data.models || [];
       state.projects = data.projects || [];
     } catch {}
   }
 
   function closeAllPopovers() {
-    ['pop-project', 'pop-model', 'pop-effort', 'pop-approval', 'pop-mode'].forEach((id) => $(id).classList.add('hidden'));
+    ['pop-project', 'pop-agent', 'pop-model', 'pop-effort', 'pop-approval', 'pop-mode'].forEach((id) => $(id)?.classList.add('hidden'));
     state.openPopover = null;
   }
 
@@ -573,9 +585,38 @@
     $('project-list').innerHTML = html.join('') || `<div class="pop-header">可在下方粘贴任意本地目录</div>`;
   }
 
+  function renderAgentMenu() {
+    const curAgent = state.meta?.activeAgent || 'codex';
+    $('agent-list').innerHTML = state.agents.map((ag) => {
+      const active = ag.id === curAgent;
+      const statusBadge = ag.isCouncil
+        ? `<span class="agent-status-tag ready">${(ag.memberIds || []).length} 已就绪</span>`
+        : (ag.installed
+            ? `<span class="agent-status-tag ready">已就绪</span>`
+            : `<span class="agent-status-tag">未安装</span>`);
+      const subText = ag.isCouncil
+        ? `并行征询: ${(ag.memberIds || []).join(', ') || '无'}`
+        : `${ag.vendor}${ag.installed ? '' : ' · 安装对应 CLI 后自动点亮'}`;
+      return `
+        <button type="button" class="pop-option agent-opt" data-agent="${escapeHtml(ag.id)}">
+          <div class="pop-opt-main">
+            <span class="pop-opt-title" style="display:flex;align-items:center;gap:6px">
+              <span class="agent-pill-dot agent-${escapeHtml(ag.id)}"></span>
+              <span>${escapeHtml(ag.displayName)}</span>
+              ${statusBadge}
+            </span>
+            <span class="pop-opt-sub">${escapeHtml(subText)}</span>
+          </div>
+          ${active ? CHECK_SVG : ''}
+        </button>
+      `;
+    }).join('');
+  }
+
   function renderModelMenu() {
-    const curModel = state.meta?.model || state.models[0]?.slug || 'auto';
-    $('model-list').innerHTML = state.models.map((m) => {
+    const models = activeModelsList();
+    const curModel = state.meta?.model || models[0]?.slug || 'auto';
+    $('model-list').innerHTML = models.map((m) => {
       const active = m.slug === curModel;
       return `
         <button type="button" class="pop-option model-opt" data-slug="${escapeHtml(m.slug)}">
@@ -590,7 +631,8 @@
   }
 
   function renderEffortMenu() {
-    const curModelObj = state.models.find((m) => m.slug === state.meta?.model) || state.models[0];
+    const models = activeModelsList();
+    const curModelObj = models.find((m) => m.slug === state.meta?.model) || models[0];
     const efforts = curModelObj?.efforts || ['low', 'medium', 'high', 'xhigh', 'max'];
     const curEffort = state.meta?.effort || 'medium';
 
@@ -643,6 +685,7 @@
 
   $('btn-project').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-project', renderProjectMenu); });
   $('btn-empty-project').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-project', renderProjectMenu); });
+  $('btn-agent').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-agent', renderAgentMenu); });
   $('btn-model').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-model', renderModelMenu); });
   $('btn-effort').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-effort', renderEffortMenu); });
   $('btn-approval').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-approval', renderApprovalMenu); });
@@ -1240,7 +1283,7 @@
       ? `<span class="msg-time" title="${escapeHtml(timeInfo.full)}">${escapeHtml(timeInfo.short)}</span>`
       : '';
 
-    if (m.sender !== 'codex') {
+    if (m.sender === 'user' || m.sender === 'antigravity') {
       const isAgy = m.sender === 'antigravity';
       const who = isAgy
         ? `Antigravity${round ? ` · 第 ${round} 轮` : ''}`
@@ -1255,11 +1298,14 @@
       return wrapper;
     }
 
+    const senderKey = String(m.sender || 'codex').toLowerCase();
+    const agentDisplay = m.senderLabel || (senderKey === 'codex' ? 'Codex' : senderKey === 'pi' ? 'Pi Agent' : senderKey === 'claude' ? 'Claude Code' : senderKey === 'gemini' ? 'Gemini CLI' : m.sender);
     const secs = m.durationMs ? `${Math.max(1, Math.round(m.durationMs / 1000))}s` : '';
-    const modelNote = m.model && m.model !== 'auto' ? ` · ${m.model}` : '';
+    const modelNote = m.model && m.model !== 'auto' && m.model !== senderKey ? ` · ${m.model}` : '';
     const stepCount = Array.isArray(m.steps) ? m.steps.length : 0;
     const stepNote = stepCount > 0 ? ` · ${stepCount} 步` : '';
-    const traceText = `${secs ? `Codex${modelNote} · 耗时 ${secs}` : `Codex${modelNote}`}${stepNote}`;
+    const traceText = `${secs ? `${agentDisplay}${modelNote} · 耗时 ${secs}` : `${agentDisplay}${modelNote}`}${stepNote}`;
+    const dotClass = `trace-blossom agent-${escapeHtml(senderKey)}`;
 
     const traceInner = renderTraceInner({
       reasoningSummary: m.reasoningSummary,
@@ -1271,7 +1317,7 @@
       ? `
         <details class="trace-details">
           <summary>
-            <span class="trace-blossom" aria-hidden="true"></span>
+            <span class="${dotClass}" aria-hidden="true"></span>
             <span>${escapeHtml(traceText)}</span>
             <svg class="trace-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="m4.5 2.5 3.5 3.5-3.5 3.5"/></svg>
           </summary>
@@ -1280,7 +1326,7 @@
       `
       : `
         <div class="trace-row">
-          <span class="trace-blossom" aria-hidden="true"></span>
+          <span class="${dotClass}" aria-hidden="true"></span>
           <span>${escapeHtml(traceText)}</span>
         </div>
       `;
@@ -1395,10 +1441,15 @@
     $('project-label').textContent = projName;
     $('empty-project-label').textContent = meta.cwd ? `${projName} (${meta.cwd})` : '选择工作项目目录';
 
-    const foundModel = state.models.find((m) => m.slug === meta.model);
+    const curAg = activeAgentObj();
+    if ($('agent-label')) $('agent-label').textContent = curAg.shortName || curAg.displayName || 'Codex';
+    if ($('agent-dot')) $('agent-dot').className = `agent-pill-dot agent-${curAg.id || 'codex'}`;
+
+    const models = activeModelsList();
+    const foundModel = models.find((m) => m.slug === meta.model);
     $('model-label').textContent = foundModel
       ? foundModel.displayName
-      : (meta.model && meta.model !== 'auto' ? meta.model : (state.models[0]?.displayName || 'Auto'));
+      : (meta.model && meta.model !== 'auto' ? meta.model : (models[0]?.displayName || 'Auto'));
 
     const efInfo = EFFORT_META[meta.effort] || { label: meta.effort || 'Medium' };
     $('effort-label').textContent = efInfo.label;
@@ -1714,7 +1765,8 @@
     const snapCtx = {
       hostId: hostConvId(),
       roomId: pinnedRoomId,
-      model: state.meta.model || state.models[0]?.slug || 'auto',
+      activeAgent: state.meta.activeAgent || 'codex',
+      model: state.meta.model || activeModelsList()[0]?.slug || 'auto',
       effort: state.meta.effort || 'medium',
       approvalPolicy: state.meta.approvalPolicy || 'on-request',
       cwd: state.meta.cwd || null,
@@ -1726,10 +1778,11 @@
     $('err-box').classList.add('hidden');
 
     try {
-      if (snapCtx.mode === 'direct' || !window.sidecar?.agent?.sendMessage) {
-        const res = await apiPost('/api/ask-codex', {
+      if (snapCtx.mode === 'direct' || snapCtx.activeAgent === 'council' || !window.sidecar?.agent?.sendMessage) {
+        const res = await apiPost('/api/ask-agent', {
           conversationId: snapCtx.hostId,
           roomId: snapCtx.roomId,
+          agentId: snapCtx.activeAgent,
           prompt: text,
           attachments,
           sender: 'user',
@@ -1766,10 +1819,11 @@
           ? `\n附带文件：\n${verifiedAtts.map((a) => `- ${a.name}: ${a.path}`).join('\n')}`
           : '';
         const cwdInfo = snapCtx.cwd ? `\n工作目录：${snapCtx.cwd}` : '';
+        const peerName = activeAgentObj().displayName || snapCtx.activeAgent;
 
         const instruction =
-          `请围绕以下议题，调用 talk_codex.mjs（传入 --room "${finalRoomId}" --model "${snapCtx.model}" --effort "${snapCtx.effort}"${snapCtx.cwd ? ` --cwd "${snapCtx.cwd}"` : ''} ${attFlags}）` +
-          `在右侧「Codex 对讲室」中与 Codex 自动有来有回讨论 ${rounds} 轮，讨论结束后在对话框给我最终结论：\n\n议题：${text || '请分析所附图片/文件'}${cwdInfo}${attContext}`;
+          `请围绕以下议题，调用 talk_agent.mjs（传入 --agent "${snapCtx.activeAgent}" --room "${finalRoomId}" --model "${snapCtx.model}" --effort "${snapCtx.effort}"${snapCtx.cwd ? ` --cwd "${snapCtx.cwd}"` : ''} ${attFlags}）` +
+          `在右侧对讲室中与 ${peerName} 自动有来有回协商 ${rounds} 轮，讨论结束后在对话框给我最终结论：\n\n议题：${text || '请分析所附图片/文件'}${cwdInfo}${attContext}`;
 
         await window.sidecar.agent.sendMessage(instruction, snapCtx.hostId !== 'global-default' ? snapCtx.hostId : undefined);
 
@@ -1907,6 +1961,16 @@
         collapsedProjects.add(key);
       }
       renderDrawerDom();
+      return;
+    }
+
+    const agentOpt = e.target.closest('.agent-opt');
+    if (agentOpt) {
+      closeAllPopovers();
+      const nextAgentId = agentOpt.dataset.agent;
+      const targetAg = state.agents.find((a) => a.id === nextAgentId);
+      const nextModel = targetAg?.defaultModel || targetAg?.models?.[0]?.slug || 'auto';
+      await updateSetting({ activeAgent: nextAgentId, model: nextModel });
       return;
     }
 

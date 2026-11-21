@@ -2,19 +2,19 @@
   "command": "node",
   "args": ["main.mjs"],
   "restart_policy": "always",
-  "display_name": "Codex 对讲室",
-  "description": "在右侧辅助栏实时查看 Antigravity 与本地 Codex 的多轮自动对话、推理状态，并支持随时插话。",
+  "display_name": "AI 协同对讲室",
+  "description": "在右侧辅助栏实时查看并操控 Antigravity 与 Codex、Pi、Claude Code、Gemini CLI、OpenCode 的多智能体对话、圆桌会诊与派工执行。",
   "has_web_ui": true,
   "agent_permissions": {
     "allows_user_interactions": true
   },
   "ui_config": {
-    "display_name": "Codex 对讲室",
+    "display_name": "AI 协同对讲室",
     "views": [
       {
         "path": "/",
         "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
-        "title": "Codex 对讲室"
+        "title": "AI 协同对讲室"
       }
     ]
   }

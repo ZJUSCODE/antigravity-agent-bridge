@@ -1,0 +1,22 @@
+{
+  "agents": [
+    {
+      "id": "aider",
+      "displayName": "Aider",
+      "shortName": "Aider",
+      "vendor": "Aider",
+      "bin": "aider",
+      "args": ["--yes-always", "--no-pretty", "--message", "{{prompt}}"],
+      "outputFormat": "text"
+    },
+    {
+      "id": "qwen",
+      "displayName": "Qwen Code",
+      "shortName": "Qwen",
+      "vendor": "Alibaba",
+      "bin": "qwen",
+      "args": ["-p", "{{prompt}}"],
+      "outputFormat": "text"
+    }
+  ]
+}

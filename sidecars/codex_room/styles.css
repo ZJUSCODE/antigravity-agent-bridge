@@ -1846,6 +1846,42 @@ button { cursor: pointer; }
   background: var(--status-success);
 }
 
+.trace-blossom.agent-codex,
+.agent-pill-dot.agent-codex { background: #10a37f; box-shadow: none; }
+.trace-blossom.agent-pi,
+.agent-pill-dot.agent-pi { background: #8b5cf6; box-shadow: none; }
+.trace-blossom.agent-claude,
+.agent-pill-dot.agent-claude { background: #d97757; box-shadow: none; }
+.trace-blossom.agent-gemini,
+.agent-pill-dot.agent-gemini { background: #4f86f7; box-shadow: none; }
+.trace-blossom.agent-opencode,
+.agent-pill-dot.agent-opencode { background: #14b8a6; box-shadow: none; }
+.trace-blossom.agent-council,
+.agent-pill-dot.agent-council { background: var(--agy-primary); box-shadow: none; }
+
+.agent-pill-dot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 50%;
+  background: #10a37f;
+  flex: none;
+}
+.agent-pill {
+  background: var(--alpha-04);
+  color: var(--text-primary);
+}
+.agent-status-tag {
+  font-size: 10.5px;
+  padding: 0 5px;
+  border-radius: var(--r-sm);
+  background: var(--alpha-06);
+  color: var(--text-tertiary);
+}
+.agent-status-tag.ready {
+  color: var(--status-success);
+  background: color-mix(in srgb, var(--status-success) 12%, transparent);
+}
+
 .live-radar-banner {
   flex: none;
   display: flex;

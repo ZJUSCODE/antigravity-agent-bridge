@@ -51,6 +51,7 @@ import {
   writeMeta,
 } from './codex_core.mjs';
 import { AppServerBridge } from './app_server_bridge.mjs';
+import { listSupportedAgents, runAgentTurn } from './agent_providers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NO_CACHE = { 'Cache-Control': 'no-store, no-cache, must-revalidate' };
@@ -241,7 +242,9 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
 
   app.api('/api/catalog', (data) => {
     const wsPaths = data.workspaces ? String(data.workspaces).split('|').filter(Boolean) : [];
+    const agents = listSupportedAgents();
     return {
+      agents,
       models: listCodexModels(),
       projects: listAvailableProjects(wsPaths),
     };
@@ -358,6 +361,7 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
   app.api('/api/settings', (data) => {
     const roomId = resolveRoomId(data, app.config.conversationId);
     const patch = {};
+    if (data.activeAgent) patch.activeAgent = String(data.activeAgent).toLowerCase();
     if (data.model) patch.model = String(data.model);
     if (data.effort) patch.effort = String(data.effort);
     if (data.mode) patch.mode = String(data.mode);
@@ -425,7 +429,7 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
     return { ok: true, roomId, verifiedAttachments };
   }, 'POST');
 
-  app.api('/api/ask-codex', async (data) => {
+  const handleAskAgent = async (data) => {
     const roomId = resolveRoomId(data, app.config.conversationId);
     const verifiedAttachments = sanitizeClientAttachments(roomId, data.attachments);
     const prompt = String(data.prompt || '').trim();
@@ -433,20 +437,50 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
       throw new Error('请输入内容或添加有效附件。');
     }
 
-    return bridge.startInteractiveTurn({
-      roomId,
+    const curMeta = readMeta(roomId);
+    const chosenAgent = String(data.agentId || data.activeAgent || curMeta.activeAgent || 'codex').toLowerCase();
+
+    if (chosenAgent === 'codex') {
+      return bridge.startInteractiveTurn({
+        roomId,
+        prompt,
+        attachments: verifiedAttachments,
+        sender: data.sender || 'user',
+        senderLabel: data.senderLabel || '你',
+        model: data.model || undefined,
+        effort: data.effort || undefined,
+        sandbox: data.sandbox || undefined,
+        approvalPolicy: data.approvalPolicy || undefined,
+        cwd: data.cwd || undefined,
+        newThread: Boolean(data.newThread),
+      });
+    }
+
+    // Fire-and-stream non-Codex CLI agents (Pi / Claude Code / Gemini CLI / OpenCode / Council)
+    // asynchronously while streaming real-time progress into `.codex_room/meta.json`!
+    runAgentTurn({
+      convId: roomId,
+      agentId: chosenAgent,
       prompt,
       attachments: verifiedAttachments,
       sender: data.sender || 'user',
       senderLabel: data.senderLabel || '你',
       model: data.model || undefined,
       effort: data.effort || undefined,
-      sandbox: data.sandbox || undefined,
+      sandbox: data.sandbox || 'workspace-write',
       approvalPolicy: data.approvalPolicy || undefined,
       cwd: data.cwd || undefined,
       newThread: Boolean(data.newThread),
+      persistPrefs: true,
+    }).catch((err) => {
+      writeMeta(roomId, { status: 'error', activeTurn: null, lastError: err.message });
     });
-  }, 'POST');
+
+    return { started: true, roomId, agentId: chosenAgent };
+  };
+
+  app.api('/api/ask-codex', handleAskAgent, 'POST');
+  app.api('/api/ask-agent', handleAskAgent, 'POST');
 
   app.api('/api/approve', (data) => {
     const roomId = resolveRoomId(data, app.config.conversationId);
@@ -522,12 +556,18 @@ function buildFolderMirrorPayload(roomId, hubTitle, deltaMessages, allCount, tra
   let charBudget = 7600;
   let truncatedCount = 0;
 
+  const PEER_ROLE_ICONS = {
+    codex: '🤖 **OpenAI Codex**',
+    pi: '🥧 **Pi Agent**',
+    claude: '🟠 **Claude Code**',
+    gemini: '✦ **Gemini CLI**',
+    opencode: '⚡ **OpenCode**',
+    antigravity: '🧠 **Google Antigravity**',
+  };
+
   for (const m of deltaMessages) {
-    const roleLabel = m.sender === 'codex'
-      ? '🤖 **OpenAI Codex**'
-      : m.sender === 'antigravity'
-        ? '🧠 **Google Antigravity**'
-        : `👤 **${m.senderLabel || '发起人'}**`;
+    const roleLabel = PEER_ROLE_ICONS[m.sender]
+      || (m.sender === 'user' ? `👤 **${m.senderLabel || '发起人'}**` : `🤖 **${m.senderLabel || m.sender}**`);
     const timeStr = m.ts ? new Date(m.ts).toLocaleString('zh-CN', { hour12: false }) : '';
     const rawBody = String(m.text || '').trim();
     if (charBudget <= 300) {
@@ -570,9 +610,9 @@ async function syncRoomToAntigravityFolder(roomId) {
   if (!agyProjectId) return;
 
   const messages = readMessages(roomId).filter((m) => m.sender !== 'system' && String(m.text || '').trim());
-  const hasCodex = messages.some((m) => m.sender === 'codex');
-  const hasPeer = messages.some((m) => m.sender === 'antigravity' || m.sender === 'user');
-  if (!hasCodex || !hasPeer || messages.length < 2) return;
+  const hasExternalAgent = messages.some((m) => m.sender !== 'antigravity' && m.sender !== 'user');
+  const hasInitiator = messages.some((m) => m.sender === 'antigravity' || m.sender === 'user');
+  if (!hasExternalAgent || !hasInitiator || messages.length < 2) return;
 
   const maxSeq = Number(messages[messages.length - 1].seq) || messages.length;
   const mirroredSeq = Number(meta.mirroredHubSeq) || 0;
