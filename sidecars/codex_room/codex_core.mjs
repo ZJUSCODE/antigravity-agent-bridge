@@ -660,8 +660,13 @@ function compareVerTuplesDesc(a, b) {
   return 0;
 }
 
-export function findCodexBinary() {
-  if (cachedBinaryInfo && Date.now() - cachedBinaryCheckedAt < 30000 && existsSync(cachedBinaryInfo.exe)) {
+export function invalidateCodexBinaryCache() {
+  cachedBinaryInfo = null;
+  cachedBinaryCheckedAt = 0;
+}
+
+export function findCodexBinary({ forceRefresh = false } = {}) {
+  if (!forceRefresh && cachedBinaryInfo && Date.now() - cachedBinaryCheckedAt < 30000 && existsSync(cachedBinaryInfo.exe)) {
     return cachedBinaryInfo;
   }
 
@@ -768,6 +773,81 @@ export function findCodexBinary() {
   }
 
   throw new Error('未找到本地 codex 可执行文件，请确认已安装 OpenAI Codex。');
+}
+
+function isTransientSpawnBusyError(err) {
+  const code = String(err?.code || '').toUpperCase();
+  const msg = String(err?.message || '');
+  return (
+    code === 'EBUSY' ||
+    code === 'ETXTBSY' ||
+    code === 'EPERM' ||
+    code === 'EACCES' ||
+    code === 'ENOENT' ||
+    /\b(EBUSY|ETXTBSY)\b/i.test(msg)
+  );
+}
+
+/**
+ * Spawns `codex.exe` resiliently across Windows Store MSIX in-place package updates
+ * (`AppXSVC` / Defender transient `spawn EBUSY` or old-version folder unmounts).
+ */
+export async function spawnCodexProcessWithRetry(args, { cwd, baseEnv = process.env, stdio = ['pipe', 'pipe', 'pipe'], resolveBinaryFn = findCodexBinary } = {}) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) invalidateCodexBinaryCache();
+    let binInfo;
+    try {
+      binInfo = resolveBinaryFn({ forceRefresh: attempt > 0 });
+    } catch (findErr) {
+      lastErr = findErr;
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      continue;
+    }
+
+    const childEnv = { ...baseEnv };
+    delete childEnv.NODE_OPTIONS;
+    const pathSep = process.platform === 'win32' ? ';' : ':';
+    const currentPath = childEnv.PATH || childEnv.Path || '';
+    childEnv.PATH = [...(binInfo.extraPathDirs || []), currentPath].filter(Boolean).join(pathSep);
+    if ('Path' in childEnv) childEnv.Path = childEnv.PATH;
+
+    try {
+      const child = await new Promise((resolveSpawn, rejectSpawn) => {
+        let proc;
+        try {
+          proc = spawn(binInfo.exe, args, {
+            ...(cwd ? { cwd } : {}),
+            env: childEnv,
+            stdio,
+            windowsHide: true,
+          });
+        } catch (syncErr) {
+          rejectSpawn(syncErr);
+          return;
+        }
+        const onSpawn = () => {
+          proc.removeListener('error', onErr);
+          resolveSpawn(proc);
+        };
+        const onErr = (asyncErr) => {
+          proc.removeListener('spawn', onSpawn);
+          rejectSpawn(asyncErr);
+        };
+        proc.once('spawn', onSpawn);
+        proc.once('error', onErr);
+      });
+      return child;
+    } catch (err) {
+      lastErr = err;
+      invalidateCodexBinaryCache();
+      if (!isTransientSpawnBusyError(err) || attempt === 4) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 450 * (attempt + 1)));
+    }
+  }
+  throw lastErr || new Error('启动 Codex 进程失败 (EBUSY)');
 }
 
 export function getActiveRoomForHost(hostConvId) {
@@ -2236,10 +2316,11 @@ export async function runCodexTurn({
 
       const childEnv = { ...process.env, AGY_CODEX_PEER_CALL: '1' };
       delete childEnv.NODE_OPTIONS;
-      const pathSep = process.platform === 'win32' ? ';' : ':';
-      const currentPath = childEnv.PATH || childEnv.Path || '';
-      childEnv.PATH = [...extraPathDirs, currentPath].filter(Boolean).join(pathSep);
-      if ('Path' in childEnv) childEnv.Path = childEnv.PATH;
+      const spawnedChild = await spawnCodexProcessWithRetry(appServerArgs, {
+        cwd: chosenCwd,
+        baseEnv: childEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
 
       return await new Promise((resolveTurn, rejectTurn) => {
         let resolvedThreadId = threadToResume;
@@ -2260,12 +2341,7 @@ export async function runCodexTurn({
         const reasoningParts = new Map();
         const cmdOutputs = new Map();
 
-        const child = spawn(exe, appServerArgs, {
-          cwd: chosenCwd,
-          env: childEnv,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          windowsHide: true,
-        });
+        const child = spawnedChild;
 
         if (typeof onChild === 'function') onChild(child);
 

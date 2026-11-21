@@ -30,6 +30,7 @@ import {
   resolveCodexServerProjectViaRpc,
   sanitizeClientAttachments,
   sanitizeConvId,
+  spawnCodexProcessWithRetry,
   stripWinPrefix,
   writeMeta,
 } from './codex_core.mjs';
@@ -122,22 +123,13 @@ export class AppServerBridge {
   }
 
   async #spawnServer() {
-    const { exe, extraPathDirs } = findCodexBinary();
-    const childEnv = { ...process.env };
-    delete childEnv.NODE_OPTIONS;
-    const pathSep = process.platform === 'win32' ? ';' : ':';
-    const currentPath = childEnv.PATH || childEnv.Path || '';
-    childEnv.PATH = [...extraPathDirs, currentPath].filter(Boolean).join(pathSep);
-    if ('Path' in childEnv) childEnv.Path = childEnv.PATH;
-
     if (this.#startedAt > 0) this.#restartCount += 1;
     this.#startedAt = Date.now();
 
-    const child = spawn(exe, ['app-server', '--stdio', '-c', 'mcp_servers={}', '--disable', 'hooks'], {
-      env: childEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = await spawnCodexProcessWithRetry(
+      ['app-server', '--stdio', '-c', 'mcp_servers={}', '--disable', 'hooks'],
+      { baseEnv: process.env, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
 
     this.#child = child;
     this.#loadedThreadConfigs.clear();
