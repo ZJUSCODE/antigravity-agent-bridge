@@ -492,4 +492,49 @@ describe('codex-bridge enterprise core & bridge suite', () => {
     assert.ok(idx.projectIdByPath instanceof Map);
     assert.ok(idx.pathByConvId instanceof Map);
   });
+
+  it('strictly resolves each Antigravity conversation to its own room and reverse-maps [双AI] mirror conversations', () => {
+    core.writeMeta('11111111-aaaa-bbbb-cccc-111111111111', {
+      title: '会话 A 讨论室',
+      mirroredHubConvId: '99999999-aaaa-bbbb-cccc-999999999999',
+    });
+    core.appendMessage('11111111-aaaa-bbbb-cccc-111111111111', { sender: 'user', text: '议题 A' });
+
+    core.writeMeta('22222222-aaaa-bbbb-cccc-222222222222', {
+      title: '会话 B 讨论室',
+    });
+    core.appendMessage('22222222-aaaa-bbbb-cccc-222222222222', { sender: 'user', text: '议题 B' });
+
+    // 1:1 resolution when switching between Antigravity conversations
+    assert.equal(
+      core.getActiveRoomForHost('11111111-aaaa-bbbb-cccc-111111111111'),
+      '11111111-aaaa-bbbb-cccc-111111111111'
+    );
+    assert.equal(
+      core.getActiveRoomForHost('22222222-aaaa-bbbb-cccc-222222222222'),
+      '22222222-aaaa-bbbb-cccc-222222222222'
+    );
+    assert.equal(
+      core.getActiveRoomForHost('33333333-aaaa-bbbb-cccc-333333333333'),
+      '33333333-aaaa-bbbb-cccc-333333333333'
+    );
+
+    // Reverse-map `[双AI]` mirrored archive conversation back to its discussion room
+    assert.equal(
+      core.getActiveRoomForHost('99999999-aaaa-bbbb-cccc-999999999999'),
+      '11111111-aaaa-bbbb-cccc-111111111111'
+    );
+
+    // Re-selecting own room cleans override entry cleanly
+    core.setActiveRoomForHost('22222222-aaaa-bbbb-cccc-222222222222', '11111111-aaaa-bbbb-cccc-111111111111');
+    assert.equal(
+      core.getActiveRoomForHost('22222222-aaaa-bbbb-cccc-222222222222'),
+      '11111111-aaaa-bbbb-cccc-111111111111'
+    );
+    core.setActiveRoomForHost('22222222-aaaa-bbbb-cccc-222222222222', '22222222-aaaa-bbbb-cccc-222222222222');
+    assert.equal(
+      core.getActiveRoomForHost('22222222-aaaa-bbbb-cccc-222222222222'),
+      '22222222-aaaa-bbbb-cccc-222222222222'
+    );
+  });
 });

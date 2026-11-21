@@ -597,6 +597,7 @@ async function syncRoomToAntigravityFolder(roomId) {
         || findMirroredHubConvInDb(agyProjectId, hubTitle);
       if (newConvId) {
         knownMirrorConvIds.add(newConvId);
+        try { setActiveRoomForHost(newConvId, roomId); } catch {}
         writeMeta(roomId, {
           mirroredHubConvId: newConvId,
           mirroredHubSeq: maxSeq,
@@ -605,6 +606,7 @@ async function syncRoomToAntigravityFolder(roomId) {
       }
     } else {
       knownMirrorConvIds.add(targetHubConvId);
+      try { setActiveRoomForHost(targetHubConvId, roomId); } catch {}
       await execAgentApiAsync(
         ['send-message', `--title=${hubTitle}`, targetHubConvId, payload],
         agyProjectId

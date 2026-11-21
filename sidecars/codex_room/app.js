@@ -27,17 +27,20 @@
 
   const MAX_CLIENT_UPLOAD_BYTES = 20 * 1024 * 1024;
 
+  const initialUrlRoomId = params.get('roomId') || '';
+  let dynamicHostConvId = '';
+
   function readAutoFollowPref() {
     try {
-      return localStorage.getItem('codex_room_auto_follow') !== '0';
+      return localStorage.getItem('codex_room_global_follow_v2') === '1';
     } catch {
-      return true;
+      return false;
     }
   }
 
   function saveAutoFollowPref(val) {
     try {
-      localStorage.setItem('codex_room_auto_follow', val ? '1' : '0');
+      localStorage.setItem('codex_room_global_follow_v2', val ? '1' : '0');
     } catch {}
   }
 
@@ -45,7 +48,7 @@
     viewEpoch: 1,
     etag: '',
     uiVersion: '',
-    roomId: '',
+    roomId: initialUrlRoomId,
     renderedRoomId: '',
     meta: null,
     messages: [],
@@ -83,7 +86,7 @@
   }
 
   function hostConvId() {
-    return window.sidecar?.conversationId || params.get('conversationId') || 'global-default';
+    return dynamicHostConvId || window.sidecar?.conversationId || params.get('conversationId') || 'global-default';
   }
 
   function syncTheme() {
@@ -102,7 +105,19 @@
   }
   syncTheme();
   window.addEventListener('message', (ev) => {
-    if (ev.data?.type === 'theme-change') setTimeout(syncTheme, 16);
+    if (ev.data?.type === 'theme-change') {
+      setTimeout(syncTheme, 16);
+      return;
+    }
+    const nextConv = ev.data?.type === 'conversation-change'
+      ? (ev.data.payload?.conversationId || ev.data.conversationId || '')
+      : '';
+    if (nextConv && nextConv !== hostConvId()) {
+      dynamicHostConvId = nextConv;
+      resetRoomViewState('');
+      loadCatalog().catch(() => {});
+      triggerImmediateRefresh().catch(() => {});
+    }
   });
 
   async function apiGet(path, signal) {
@@ -953,8 +968,8 @@
     if (!btn) return;
     btn.classList.toggle('auto-follow-on', Boolean(state.autoFollowLive));
     btn.title = state.autoFollowLive
-      ? '自动跟随实时讨论：已开启（任意对话发起双 AI 协商时自动切入直播，点击可锁定当前视图）'
-      : '自动跟随实时讨论：已锁定当前对话（点击开启自动跟随）';
+      ? '当前模式：全局追随后台实时讨论（任意对话开跑时自动切屏；点击恢复随当前 Antigravity 对话切换窗口）'
+      : '当前模式：随 Antigravity 对话自动切换对应窗口（点击可开启全局追随后台实时讨论）';
   }
 
   async function jumpToLiveRoom(live, toastMsg) {
@@ -964,11 +979,8 @@
       $('live-radar-banner').classList.add('hidden');
       state.manualHoldLiveKey = '';
       state.seenLiveUpdatedAt = Math.max(state.seenLiveUpdatedAt, Number(live.updatedAt) || 0);
-      const res = await apiPost('/api/threads/select', {
-        conversationId: hostConvId(),
-        roomId: live.roomId,
-      });
-      resetRoomViewState(res.roomId || live.roomId);
+      // Switch in-memory ONLY so peeking at a live room NEVER pollutes host_room_map for the current Antigravity tab!
+      resetRoomViewState(live.roomId);
       if (toastMsg) {
         showToast(`${toastMsg}：${live.title || '双 AI 协商'}`, 2400);
       }
@@ -989,9 +1001,12 @@
         jumpToLiveRoom(live, '已切入实时讨论');
         return;
       }
-      showToast('已开启自动跟随实时讨论');
+      showToast('已开启全局追随实时讨论');
     } else {
-      showToast('已锁定当前视图（后台新讨论将以顶部横幅提示）');
+      // Immediately snap back to the current Antigravity conversation's bound session window!
+      resetRoomViewState('');
+      triggerImmediateRefresh().catch(() => {});
+      showToast('已恢复随当前 Antigravity 对话自动切换窗口');
     }
   });
 
@@ -1535,10 +1550,6 @@
           const liveKey = liveTurnKey(live);
           const isLiveBusy = live.status === 'thinking' || live.status === 'awaiting_approval';
           const liveTs = Number(live.updatedAt) || 0;
-          const curTs = Number(snap.meta?.updatedAt ?? state.meta?.updatedAt) || 0;
-          const isFreshActivity = !state.bootSynced
-            ? (liveTs > curTs && Date.now() - liveTs < 45 * 60 * 1000)
-            : (liveTs > state.seenLiveUpdatedAt);
 
           state.seenLiveUpdatedAt = Math.max(state.seenLiveUpdatedAt, liveTs);
           state.bootSynced = true;
@@ -1547,21 +1558,23 @@
           const curBusy = curStatus === 'thinking' || curStatus === 'awaiting_approval';
           const hasUnsentInput = Boolean($('composer-input')?.value.trim()) || currentAttachments().length > 0;
 
+          // By default (`autoFollowLive === false`), strictly stay on the current Antigravity conversation's window!
+          // Only auto-jump if the user explicitly enabled global live-follow AND another room is actively running right now.
           if (
             state.autoFollowLive &&
+            isLiveBusy &&
             !curBusy &&
             !hasUnsentInput &&
             !state.switchingLive &&
-            state.manualHoldLiveKey !== liveKey &&
-            (isLiveBusy || isFreshActivity)
+            state.manualHoldLiveKey !== liveKey
           ) {
-            await jumpToLiveRoom(live, isLiveBusy ? '已自动切入实时讨论' : '已自动同步至最新讨论');
+            await jumpToLiveRoom(live, '已自动切入实时讨论');
             return;
           }
 
           if (isLiveBusy && banner) {
             const projSuffix = live.projectName ? ` · ${live.projectName}` : '';
-            $('live-radar-text').textContent = `正在实时讨论：${live.title || '双 AI 协商'}${projSuffix}`;
+            $('live-radar-text').textContent = `其他会话正在讨论：${live.title || '双 AI 协商'}${projSuffix}`;
             banner.classList.remove('hidden');
           } else if (banner) {
             banner.classList.add('hidden');

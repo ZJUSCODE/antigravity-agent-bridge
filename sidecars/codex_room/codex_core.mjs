@@ -861,6 +861,27 @@ export function getActiveRoomForHost(hostConvId) {
       }
     } catch {}
   }
+
+  // Reverse-resolve mirrored `[双AI]` or peer-created Antigravity conversations back to their discussion room
+  const ownMessagesPath = join(getRoomDir(safeHost), 'messages.jsonl');
+  if (safeHost !== 'global-default' && !existsSync(ownMessagesPath)) {
+    const brain = getBrainRoot();
+    if (existsSync(brain)) {
+      try {
+        for (const entry of readdirSync(brain, { withFileTypes: true })) {
+          if (!entry.isDirectory() || entry.name === safeHost) continue;
+          const metaPath = join(brain, entry.name, '.codex_room', 'meta.json');
+          if (!existsSync(metaPath)) continue;
+          const meta = readJsonWithBackupSync(metaPath);
+          if (meta && (meta.mirroredHubConvId === safeHost || meta.agyConversationId === safeHost)) {
+            setActiveRoomForHost(safeHost, entry.name);
+            return entry.name;
+          }
+        }
+      } catch {}
+    }
+  }
+
   return safeHost;
 }
 
@@ -871,7 +892,11 @@ export function setActiveRoomForHost(hostConvId, targetRoomId) {
   const safeTarget = assertValidExplicitRoomId(targetRoomId);
   withRoomFileLockSync(dataDir, () => {
     const map = readJsonWithBackupSync(mapFile) || {};
-    map[safeHost] = safeTarget;
+    if (safeTarget === safeHost) {
+      delete map[safeHost];
+    } else {
+      map[safeHost] = safeTarget;
+    }
     writeJsonAtomicSync(mapFile, map);
   });
   return safeTarget;
