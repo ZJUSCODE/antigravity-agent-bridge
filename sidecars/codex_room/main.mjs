@@ -38,6 +38,7 @@ import {
   removeUploadedFile,
   renameRoom,
   resetCodexThread,
+  resolveDefaultCodexModel,
   resolveSafeUploadPath,
   roomEvents,
   sanitizeClientAttachments,
@@ -81,6 +82,15 @@ function resolveCodexAsarPath() {
         if (existsSync(candidate)) return candidate;
       }
     } catch {}
+  }
+  if (process.platform === 'darwin') {
+    const macCandidates = [
+      '/Applications/Codex.app/Contents/Resources/app.asar',
+      join(process.env.HOME || '', 'Applications', 'Codex.app', 'Contents', 'Resources', 'app.asar'),
+    ];
+    for (const c of macCandidates) {
+      if (existsSync(c)) return c;
+    }
   }
   return null;
 }
@@ -271,7 +281,7 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
     const hostId = sanitizeConvId(data.conversationId || app.config.conversationId || 'global-default');
     const meta = createNewRoom({
       cwd: data.cwd || null,
-      model: data.model || 'gpt-6.2-astra',
+      model: data.model || resolveDefaultCodexModel(),
       effort: data.effort || 'medium',
       mode: data.mode || 'dual-2',
       approvalPolicy: data.approvalPolicy || 'on-request',
@@ -460,14 +470,19 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
   app.api('/api/open-in-codex', (data) => {
     const roomId = resolveRoomId(data, app.config.conversationId);
     const meta = readMeta(roomId);
-    if (!meta.codexThreadId) {
-      throw new Error('当前对话尚未生成对应的 Codex 线程');
+    const threadId = String(meta.codexThreadId || '').trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{13,55}$/i.test(threadId)) {
+      throw new Error('当前对话尚未生成有效的 Codex 线程 UUID');
     }
-    const deepUrl = `codex://threads/${meta.codexThreadId}`;
+    const deepUrl = `codex://threads/${threadId}`;
     if (process.platform === 'win32') {
       execFile('explorer.exe', [deepUrl], { windowsHide: true }, () => {});
+    } else if (process.platform === 'darwin') {
+      execFile('open', [deepUrl], () => {});
+    } else {
+      execFile('xdg-open', [deepUrl], () => {});
     }
-    return { ok: true, url: deepUrl, codexThreadId: meta.codexThreadId };
+    return { ok: true, url: deepUrl, codexThreadId: threadId };
   }, 'POST');
 
   return { app, bridge };

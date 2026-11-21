@@ -109,6 +109,39 @@ export function stripWinPrefix(p) {
   return String(p || '').trim().replace(/^\\\\\?\\/, '');
 }
 
+export function toPathKey(p) {
+  const s = String(p || '');
+  return process.platform === 'linux' ? s : s.toLowerCase();
+}
+
+export function getAntigravityAppDataDir() {
+  if (process.env.ANTIGRAVITY_APP_DATA_DIR) {
+    return process.env.ANTIGRAVITY_APP_DATA_DIR;
+  }
+  const execData = process.env.ANTIGRAVITY_EXECUTABLE_DATA_DIR;
+  if (execData) {
+    for (let d = execData; d !== dirname(d); d = dirname(d)) {
+      if (basename(d) === 'sidecar_data') {
+        return dirname(d);
+      }
+    }
+  }
+  const geminiRoot = join(homedir(), '.gemini');
+  const standard = join(geminiRoot, 'antigravity');
+  if (existsSync(standard)) return standard;
+  try {
+    if (existsSync(geminiRoot)) {
+      const alt = readdirSync(geminiRoot)
+        .filter((n) => n.startsWith('antigravity'))
+        .sort()
+        .map((n) => join(geminiRoot, n))
+        .find((p) => existsSync(join(p, 'brain')));
+      if (alt) return alt;
+    }
+  } catch {}
+  return standard;
+}
+
 export function normalizeDirPath(p) {
   const clean = stripWinPrefix(p);
   if (!clean) return '';
@@ -252,9 +285,7 @@ export async function resolveCodexServerProjectViaRpc(sendRpcFn, chosenCwd) {
 }
 
 export function getBrainRoot() {
-  const appData = process.env.ANTIGRAVITY_APP_DATA_DIR
-    || join(homedir(), '.gemini', 'antigravity');
-  return join(appData, 'brain');
+  return join(getAntigravityAppDataDir(), 'brain');
 }
 
 export function getCodexHome() {
@@ -294,12 +325,27 @@ function createIsolatedPromptSpillDir() {
 }
 
 export function getDefaultOutputsDir() {
-  const eRoot = 'E:\\';
-  if (process.platform === 'win32' && existsSync(eRoot)) {
-    const out = 'E:\\Antigravity\\Outputs\\Codex-Room';
-    mkdirSync(out, { recursive: true });
-    return out;
+  if (process.env.CODEX_BRIDGE_EXPORT_DIR) {
+    mkdirSync(process.env.CODEX_BRIDGE_EXPORT_DIR, { recursive: true });
+    return process.env.CODEX_BRIDGE_EXPORT_DIR;
   }
+  if (process.platform === 'win32') {
+    try {
+      if (existsSync('E:\\Antigravity')) {
+        const out = 'E:\\Antigravity\\Outputs\\Codex-Room';
+        mkdirSync(out, { recursive: true });
+        return out;
+      }
+    } catch {}
+  }
+  const downloads = join(homedir(), 'Downloads');
+  try {
+    if (existsSync(downloads)) {
+      const dlOut = join(downloads, 'Codex-Room');
+      mkdirSync(dlOut, { recursive: true });
+      return dlOut;
+    }
+  } catch {}
   const fallback = join(getPluginDataDir(), 'exports');
   mkdirSync(fallback, { recursive: true });
   return fallback;
@@ -752,7 +798,29 @@ export function findCodexBinary({ forceRefresh = false } = {}) {
     }
   }
 
-  // 4. PATH
+  // 4. macOS & Linux standard desktop bundle / package-manager locations
+  if (process.platform !== 'win32') {
+    const home = homedir();
+    const unixCandidates = [
+      '/Applications/Codex.app/Contents/Resources/codex',
+      join(home, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex'),
+      join(home, '.local', 'bin', 'codex'),
+      join(home, '.npm-global', 'bin', 'codex'),
+      join(home, '.cargo', 'bin', 'codex'),
+      '/opt/homebrew/bin/codex',
+      '/usr/local/bin/codex',
+      '/usr/bin/codex',
+    ];
+    for (const c of unixCandidates) {
+      if (existsSync(c)) {
+        cachedBinaryInfo = { exe: c, extraPathDirs: [dirname(c)] };
+        cachedBinaryCheckedAt = Date.now();
+        return cachedBinaryInfo;
+      }
+    }
+  }
+
+  // 5. PATH
   try {
     const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
     const out = execFileSync(cmd, ['codex'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
@@ -764,7 +832,7 @@ export function findCodexBinary({ forceRefresh = false } = {}) {
     }
   } catch {}
 
-  // 5. Fallback .sandbox-bin
+  // 6. Fallback .sandbox-bin
   const sandboxBin = join(getCodexHome(), '.sandbox-bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
   if (existsSync(sandboxBin)) {
     cachedBinaryInfo = { exe: sandboxBin, extraPathDirs: [dirname(sandboxBin)] };
@@ -772,7 +840,7 @@ export function findCodexBinary({ forceRefresh = false } = {}) {
     return cachedBinaryInfo;
   }
 
-  throw new Error('未找到本地 codex 可执行文件，请确认已安装 OpenAI Codex。');
+  throw new Error('未找到本地 codex 可执行文件，请安装 OpenAI Codex 桌面端或 CLI（或设置 CODEX_BIN 环境变量）。');
 }
 
 function isTransientSpawnBusyError(err) {
@@ -916,7 +984,7 @@ function buildFallbackMeta(safeConv) {
     agyConversationId: null,
     needsForkOnNextTurn: false,
     forkFromSessionId: null,
-    model: 'gpt-6.2-astra',
+    model: resolveDefaultCodexModel(),
     effort: 'medium',
     sandbox: 'workspace-write',
     approvalPolicy: 'on-request',
@@ -1390,7 +1458,7 @@ export function createNewRoom({ cwd, model, effort, mode, approvalPolicy } = {})
     agyConversationId: null,
     needsForkOnNextTurn: false,
     forkFromSessionId: null,
-    model: model || 'gpt-6.2-astra',
+    model: model || resolveDefaultCodexModel(),
     effort: effort || 'medium',
     approvalPolicy: approvalPolicy || 'on-request',
     mode: mode || 'dual-2',
@@ -1843,7 +1911,7 @@ export function switchToProject(hostConvId, projectPath, currentPrefs = {}) {
 
   const freshMeta = createNewRoom({
     cwd: norm,
-    model: currentPrefs.model || 'gpt-6.2-astra',
+    model: currentPrefs.model || resolveDefaultCodexModel(),
     effort: currentPrefs.effort || 'medium',
     mode: currentPrefs.mode || 'dual-2',
     approvalPolicy: currentPrefs.approvalPolicy || 'on-request',
@@ -1852,16 +1920,52 @@ export function switchToProject(hostConvId, projectPath, currentPrefs = {}) {
   return { action: 'created_project_thread', roomId, snap: getRoomSnapshot(roomId) };
 }
 
+export function resolveDefaultCodexModel() {
+  if (process.env.CODEX_DEFAULT_MODEL && process.env.CODEX_DEFAULT_MODEL.trim()) {
+    return process.env.CODEX_DEFAULT_MODEL.trim();
+  }
+
+  const codexHome = getCodexHome();
+  const cfgPath = join(codexHome, 'config.toml');
+  if (existsSync(cfgPath)) {
+    try {
+      const toml = readFileSync(cfgPath, 'utf-8');
+      const topSection = toml.split(/^\s*\[/m)[0] || '';
+      const match = /^\s*model\s*=\s*['"]([^'"]+)['"]/m.exec(topSection);
+      if (match && match[1].trim()) {
+        return match[1].trim();
+      }
+    } catch {}
+  }
+
+  const cacheFile = join(codexHome, 'models_cache.json');
+  if (existsSync(cacheFile)) {
+    try {
+      const data = JSON.parse(readFileSync(cacheFile, 'utf-8'));
+      const rawModels = Array.isArray(data) ? data : (data.models || []);
+      const firstVisible = rawModels.find((m) => m && m.visibility === 'list' && (m.slug || m.id));
+      if (firstVisible) return firstVisible.slug || firstVisible.id;
+    } catch {}
+  }
+
+  return 'auto';
+}
+
 export function listCodexModels() {
-  const fallback = [
-    { slug: 'gpt-6.2-astra', displayName: 'GPT-6.2-Astra', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-    { slug: 'gpt-6.2-sol', displayName: 'GPT-6.2-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-    { slug: 'gpt-6.1-terra', displayName: 'GPT-6.1 Terra', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-    { slug: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-    { slug: 'gpt-6-astra', displayName: 'GPT-6-Astra', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+  const autoOption = {
+    slug: 'auto',
+    displayName: 'Auto（跟随 Codex 默认）',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  };
+  const publicFallback = [
+    autoOption,
+    { slug: 'gpt-5.4', displayName: 'GPT-5.4', efforts: ['low', 'medium', 'high', 'xhigh'] },
+    { slug: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex', efforts: ['low', 'medium', 'high', 'xhigh'] },
+    { slug: 'gpt-5.2-codex', displayName: 'GPT-5.2 Codex', efforts: ['low', 'medium', 'high', 'xhigh'] },
+    { slug: 'o3', displayName: 'o3', efforts: ['low', 'medium', 'high'] },
   ];
   const cacheFile = join(getCodexHome(), 'models_cache.json');
-  if (!existsSync(cacheFile)) return fallback;
+  if (!existsSync(cacheFile)) return publicFallback;
   try {
     const data = JSON.parse(readFileSync(cacheFile, 'utf-8'));
     const rawModels = Array.isArray(data) ? data : (data.models || []);
@@ -1879,9 +1983,9 @@ export function listCodexModels() {
           efforts: efforts.length ? efforts : ['low', 'medium', 'high', 'xhigh'],
         };
       });
-    return visible.length > 0 ? visible : fallback;
+    return visible.length > 0 ? [...visible, autoOption] : publicFallback;
   } catch {
-    return fallback;
+    return publicFallback;
   }
 }
 
@@ -1891,19 +1995,26 @@ export function listAvailableProjects(extraPaths = []) {
     if (!rawPath || typeof rawPath !== 'string') return;
     let p = rawPath.trim();
     if (p.startsWith('file:///')) {
-      try { p = decodeURIComponent(new URL(p).pathname).replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\'); } catch {}
+      try { p = decodeURIComponent(new URL(p).pathname).replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, sep); } catch {}
     }
     const norm = normalizeDirPath(p);
     if (!norm || !existsSync(norm)) return;
     try { if (!statSync(norm).isDirectory()) return; } catch { return; }
-    const key = norm.toLowerCase();
-    if (key.includes('codex-default\\2026-')) return;
+    const key = toPathKey(norm);
+    if (norm.toLowerCase().includes('codex-default\\2026-') || norm.toLowerCase().includes('codex-default/2026-')) return;
     if (!seen.has(key)) {
       seen.set(key, { name: customName || basename(norm) || norm, path: norm, group });
     }
   };
 
   for (const ep of extraPaths) addDir(ep, '当前工作区');
+
+  if (process.env.CODEX_BRIDGE_PROJECT_DIRS) {
+    const delim = process.platform === 'win32' ? ';' : ':';
+    for (const dir of process.env.CODEX_BRIDGE_PROJECT_DIRS.split(delim)) {
+      addDir(dir, '配置工作区');
+    }
+  }
 
   const { projects: dbProjects } = queryCodexStateDb();
   for (const dp of dbProjects) {
@@ -1923,13 +2034,20 @@ export function listAvailableProjects(extraPaths = []) {
     } catch {}
   }
 
-  const agyProjRoot = 'E:\\Antigravity\\Projects';
-  if (existsSync(agyProjRoot)) {
-    for (const d of readdirSync(agyProjRoot, { withFileTypes: true })) {
-      if (d.isDirectory() && !d.name.startsWith('.')) {
-        addDir(join(agyProjRoot, d.name), 'Antigravity 项目');
+  const scanRoots = [
+    ...(process.platform === 'win32' ? ['E:\\Antigravity\\Projects'] : []),
+    join(homedir(), 'Projects'),
+    join(homedir(), 'projects'),
+  ];
+  for (const rootDir of scanRoots) {
+    if (!existsSync(rootDir)) continue;
+    try {
+      for (const d of readdirSync(rootDir, { withFileTypes: true }).slice(0, 20)) {
+        if (d.isDirectory() && !d.name.startsWith('.')) {
+          addDir(join(rootDir, d.name), '本地项目');
+        }
       }
-    }
+    } catch {}
   }
 
   const cfgPath = join(getCodexHome(), 'config.toml');
@@ -2265,7 +2383,8 @@ export async function runCodexTurn({
     if (typeof hbTimer.unref === 'function') hbTimer.unref();
 
     try {
-      const chosenModel = model || prevMeta.model || 'gpt-6.2-astra';
+      const chosenModel = model || prevMeta.model || resolveDefaultCodexModel();
+      const explicitModel = chosenModel && chosenModel !== 'auto' ? chosenModel : undefined;
       const chosenEffort = effort || prevMeta.effort || 'medium';
       const chosenSandbox = sandbox || prevMeta.sandbox || 'workspace-write';
       const inferredAgyCwd = (!cwd && !prevMeta.cwd)
@@ -2800,7 +2919,7 @@ export async function runCodexTurn({
                   threadId: forkSourceId,
                   excludeTurns: true,
                   threadSource: 'user',
-                  model: chosenModel,
+                  ...(explicitModel ? { model: explicitModel } : {}),
                   cwd: chosenCwd,
                   approvalPolicy: 'never',
                   sandbox: chosenSandbox,
@@ -2827,7 +2946,7 @@ export async function runCodexTurn({
                 const res = await sendRpc('thread/resume', {
                   threadId: resolvedThreadId,
                   excludeTurns: true,
-                  model: chosenModel,
+                  ...(explicitModel ? { model: explicitModel } : {}),
                   cwd: chosenCwd,
                   approvalPolicy: 'never',
                   sandbox: chosenSandbox,
@@ -2845,7 +2964,7 @@ export async function runCodexTurn({
 
             if (!resolvedThreadId) {
               const startRes = await sendRpc('thread/start', {
-                model: chosenModel,
+                ...(explicitModel ? { model: explicitModel } : {}),
                 cwd: chosenCwd,
                 ...(codexServerProjectId ? { projectId: codexServerProjectId } : {}),
                 threadSource: 'user',
@@ -2889,7 +3008,7 @@ export async function runCodexTurn({
 
             const turnRes = await sendRpc('turn/start', {
               threadId: resolvedThreadId,
-              model: chosenModel,
+              ...(explicitModel ? { model: explicitModel } : {}),
               effort: chosenEffort,
               cwd: chosenCwd,
               approvalPolicy: 'never',
@@ -3084,13 +3203,28 @@ export function findAgyBinary() {
     return cachedAgyBin;
   }
 
-  const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
-  const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
-  const candidates = [
-    join(localAppData, 'agy', 'bin', process.platform === 'win32' ? 'agy.exe' : 'agy'),
-    join(localAppData, 'Programs', 'antigravity', 'bin', process.platform === 'win32' ? 'agy.exe' : 'agy'),
-    join(appData, 'Antigravity', 'bin', process.platform === 'win32' ? 'agy.exe' : 'agy'),
-  ];
+  const home = homedir();
+  const candidates = [];
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local');
+    const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming');
+    candidates.push(
+      join(localAppData, 'agy', 'bin', 'agy.exe'),
+      join(localAppData, 'Programs', 'antigravity', 'bin', 'agy.exe'),
+      join(appData, 'Antigravity', 'bin', 'agy.exe')
+    );
+  } else {
+    candidates.push(
+      '/Applications/Antigravity.app/Contents/Resources/app/bin/agy',
+      join(home, 'Applications', 'Antigravity.app', 'Contents', 'Resources', 'app', 'bin', 'agy'),
+      join(home, '.antigravity', 'bin', 'agy'),
+      join(home, '.local', 'bin', 'agy'),
+      '/opt/Antigravity/bin/agy',
+      '/opt/homebrew/bin/agy',
+      '/usr/local/bin/agy',
+      '/usr/bin/agy'
+    );
+  }
   for (const c of candidates) {
     if (existsSync(c)) {
       cachedAgyBin = c;
@@ -3101,7 +3235,7 @@ export function findAgyBinary() {
 
   try {
     const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
-    const out = execFileSync(cmd, ['agy'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const out = execFileSync(cmd, ['agy'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     const first = out.split(/\r?\n/).map((l) => l.trim()).find((l) => l && existsSync(l));
     if (first) {
       cachedAgyBin = first;
@@ -3110,7 +3244,7 @@ export function findAgyBinary() {
     }
   } catch {}
 
-  throw new Error('未找到本地 Antigravity CLI (agy) 可执行文件。');
+  throw new Error('未找到本地 Antigravity CLI (agy) 可执行文件，请确认已安装 Antigravity 或设置 AGY_BIN 环境变量。');
 }
 
 export function resetAntigravityThread(convId, { clearHistory = false } = {}) {

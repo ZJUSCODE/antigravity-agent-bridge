@@ -91,22 +91,33 @@
 
   function syncTheme() {
     const probe = document.createElement('span');
-    probe.style.cssText = 'position:absolute;visibility:hidden;color:var(--background, #ffffff)';
+    probe.style.cssText = 'position:absolute;visibility:hidden;color:var(--background, #f7f7f8)';
     document.documentElement.appendChild(probe);
     const c = getComputedStyle(probe).color;
     probe.remove();
+    let theme = window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     const nums = (c.match(/[\d.]+/g) || []).map(Number);
     if (nums.length >= 3) {
       const scale = c.startsWith('color(') ? 1 : 255;
       const [r, g, b] = nums.slice(0, 3).map((v) => v / scale);
       const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      document.documentElement.dataset.theme = lum < 0.5 ? 'dark' : 'light';
+      theme = lum < 0.5 ? 'dark' : 'light';
     }
+    if (document.documentElement.dataset.theme !== theme) {
+      document.documentElement.dataset.theme = theme;
+    }
+    document.documentElement.style.colorScheme = theme;
   }
   syncTheme();
+  // Synchronously track Antigravity's live :root CSS token updates from preload.js!
+  new MutationObserver(() => {
+    syncTheme();
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', syncTheme);
+
   window.addEventListener('message', (ev) => {
     if (ev.data?.type === 'theme-change') {
-      setTimeout(syncTheme, 16);
+      syncTheme();
       return;
     }
     const nextConv = ev.data?.type === 'conversation-change'
@@ -563,7 +574,7 @@
   }
 
   function renderModelMenu() {
-    const curModel = state.meta?.model || 'gpt-6.2-astra';
+    const curModel = state.meta?.model || state.models[0]?.slug || 'auto';
     $('model-list').innerHTML = state.models.map((m) => {
       const active = m.slug === curModel;
       return `
@@ -1025,7 +1036,7 @@
     const res = await apiPost('/api/threads/create', {
       conversationId: hostConvId(),
       cwd: targetCwd,
-      model: state.meta?.model || 'gpt-6.2-astra',
+      model: state.meta?.model || state.models[0]?.slug || 'auto',
       effort: state.meta?.effort || 'medium',
       mode: state.meta?.mode || 'dual-2',
       approvalPolicy: state.meta?.approvalPolicy || 'on-request',
@@ -1230,12 +1241,13 @@
       : '';
 
     if (m.sender !== 'codex') {
-      const who = m.sender === 'antigravity'
+      const isAgy = m.sender === 'antigravity';
+      const who = isAgy
         ? `Antigravity${round ? ` · 第 ${round} 轮` : ''}`
         : (m.senderLabel || '你');
-      wrapper.className = `prompt-turn${isFresh ? ' arriving' : ''}`;
+      wrapper.className = `prompt-turn${isAgy ? ' peer-agy' : ''}${isFresh ? ' arriving' : ''}`;
       wrapper.innerHTML = `
-        <span class="prompt-caption">${escapeHtml(who)}</span>
+        <span class="prompt-caption">${isAgy ? '<span class="role-dot agy-dot" aria-hidden="true"></span>' : ''}${escapeHtml(who)}</span>
         ${renderTurnAttachments(m.attachments)}
         ${m.text ? `<div class="prompt-pill">${renderMarkdown(m.text)}</div>` : ''}
         ${timeHtml}
@@ -1244,10 +1256,10 @@
     }
 
     const secs = m.durationMs ? `${Math.max(1, Math.round(m.durationMs / 1000))}s` : '';
-    const modelNote = m.model ? ` (${m.model})` : '';
+    const modelNote = m.model && m.model !== 'auto' ? ` · ${m.model}` : '';
     const stepCount = Array.isArray(m.steps) ? m.steps.length : 0;
     const stepNote = stepCount > 0 ? ` · ${stepCount} 步` : '';
-    const traceText = `${secs ? `Codex${modelNote} · Worked for ${secs}` : `Codex${modelNote}`}${stepNote}`;
+    const traceText = `${secs ? `Codex${modelNote} · 耗时 ${secs}` : `Codex${modelNote}`}${stepNote}`;
 
     const traceInner = renderTraceInner({
       reasoningSummary: m.reasoningSummary,
@@ -1384,7 +1396,9 @@
     $('empty-project-label').textContent = meta.cwd ? `${projName} (${meta.cwd})` : '选择工作项目目录';
 
     const foundModel = state.models.find((m) => m.slug === meta.model);
-    $('model-label').textContent = foundModel ? foundModel.displayName : (meta.model || 'GPT-6.2-Astra');
+    $('model-label').textContent = foundModel
+      ? foundModel.displayName
+      : (meta.model && meta.model !== 'auto' ? meta.model : (state.models[0]?.displayName || 'Auto'));
 
     const efInfo = EFFORT_META[meta.effort] || { label: meta.effort || 'Medium' };
     $('effort-label').textContent = efInfo.label;

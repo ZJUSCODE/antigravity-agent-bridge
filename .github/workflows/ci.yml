@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Test (${{ matrix.os }} · Node 22)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+
+      - name: Syntax check all modules
+        run: npm run check
+
+      - name: Run unit, concurrency & Sidecar HTTP tests
+        run: npm test
+
+      - name: Verify cross-platform dry-run installer & doctor
+        run: |
+          node scripts/install.mjs --dry-run
+          node scripts/doctor.mjs --ci

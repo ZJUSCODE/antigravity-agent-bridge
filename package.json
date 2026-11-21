@@ -1,15 +1,30 @@
 {
   "name": "codex-bridge",
-  "version": "3.5.0",
-  "private": true,
-  "description": "Enterprise Antigravity <-> OpenAI Codex Native Aux-Pane Sidecar & Dual-AI Roundtable Plugin",
+  "version": "4.0.0",
+  "license": "MIT",
+  "description": "Native Antigravity Aux-Pane Sidecar & Symmetric Dual-Agent Orchestration Plugin for Google Antigravity <-> OpenAI Codex",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ZJUSCODE/codex-bridge.git"
+  },
+  "homepage": "https://github.com/ZJUSCODE/codex-bridge",
+  "keywords": [
+    "antigravity",
+    "antigravity-plugin",
+    "openai-codex",
+    "multi-agent",
+    "code-review",
+    "sidecar"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.5.0"
   },
   "scripts": {
     "setup": "node scripts/install.mjs",
+    "uninstall-bridge": "node scripts/uninstall.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "test": "node --test tests/codex_bridge.test.mjs",
-    "check": "node --check sidecars/codex_room/codex_core.mjs && node --check sidecars/codex_room/app_server_bridge.mjs && node --check sidecars/codex_room/main.mjs && node --check sidecars/codex_room/app.js && node --check skills/codex-chat/scripts/talk_codex.mjs"
+    "check": "node --check sidecars/codex_room/codex_core.mjs && node --check sidecars/codex_room/app_server_bridge.mjs && node --check sidecars/codex_room/main.mjs && node --check sidecars/codex_room/app.js && node --check skills/codex-chat/scripts/talk_codex.mjs && node --check codex-skill/antigravity-chat/scripts/talk_antigravity.mjs && node --check scripts/install.mjs && node --check scripts/uninstall.mjs && node --check scripts/doctor.mjs"
   }
 }

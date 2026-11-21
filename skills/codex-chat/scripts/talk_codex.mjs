@@ -5,8 +5,8 @@
  * and root-cause debugging while streaming live into the Aux-Pane `codex_room`.
  */
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 if (process.env.AGY_CODEX_PEER_CALL === '1') {
   console.error('[Peer Guard] 当前处于同侪被调用回合（AGY_CODEX_PEER_CALL=1），请直接输出独立专业结论，禁止反向递归调用 talk_codex.mjs。');
@@ -22,7 +22,7 @@ const {
   getActiveRoomForHost,
   resetCodexThread,
   runCodexTurn,
-} = await import(new URL(`file:///${corePath.replace(/\\/g, '/')}`).href);
+} = await import(pathToFileURL(corePath).href);
 
 function parseArgs(argv) {
   const out = {

@@ -6,25 +6,28 @@
  * turn live into Antigravity's shared `.codex_room` Sidecar UI!
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 if (process.env.AGY_CODEX_PEER_CALL === '1') {
   console.error('[Peer Guard] 当前处于同侪被调用回合（AGY_CODEX_PEER_CALL=1），请直接输出独立专业结论，禁止反向递归调用 talk_antigravity.mjs。');
   process.exit(2);
 }
 
-const corePath = join(
-  homedir(),
-  '.gemini',
-  'config',
-  'plugins',
-  'codex-bridge',
-  'sidecars',
-  'codex_room',
-  'codex_core.mjs'
-);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const candidateCorePaths = [
+  process.env.CODEX_BRIDGE_HOME ? join(process.env.CODEX_BRIDGE_HOME, 'sidecars', 'codex_room', 'codex_core.mjs') : '',
+  resolve(__dirname, '..', '..', '..', 'sidecars', 'codex_room', 'codex_core.mjs'),
+  join(homedir(), '.gemini', 'config', 'plugins', 'codex-bridge', 'sidecars', 'codex_room', 'codex_core.mjs'),
+].filter(Boolean);
+
+const corePath = candidateCorePaths.find((p) => existsSync(p)) || candidateCorePaths[candidateCorePaths.length - 1];
+if (!existsSync(corePath)) {
+  console.error(`[Antigravity Peer Error] 未找到 codex-bridge 核心模块 (${corePath})，请先执行 npm run setup 完成插件安装。`);
+  process.exit(1);
+}
 
 const {
   buildPeerEnvelope,
@@ -33,7 +36,7 @@ const {
   resetAntigravityThread,
   runAntigravityTurn,
   sanitizeConvId,
-} = await import(new URL(`file:///${corePath.replace(/\\/g, '/')}`).href);
+} = await import(pathToFileURL(corePath).href);
 
 function deriveProjectRoomId(cwdPath) {
   const norm = resolve(cwdPath || process.cwd());

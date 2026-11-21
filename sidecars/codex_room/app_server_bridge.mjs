@@ -28,6 +28,7 @@ import {
   registerInProcessBusyChecker,
   releaseRoomTurnLease,
   resolveCodexServerProjectViaRpc,
+  resolveDefaultCodexModel,
   sanitizeClientAttachments,
   sanitizeConvId,
   spawnCodexProcessWithRetry,
@@ -527,7 +528,8 @@ export class AppServerBridge {
         return { started: false, cancelled: true, roomId: safeRoom };
       }
 
-      chosenModel = model || prevMeta.model || 'gpt-6.2-astra';
+      chosenModel = model || prevMeta.model || resolveDefaultCodexModel();
+      const explicitModel = chosenModel && chosenModel !== 'auto' ? chosenModel : undefined;
       chosenEffort = effort || prevMeta.effort || 'medium';
       chosenSandbox = sandbox || prevMeta.sandbox || 'workspace-write';
       chosenApproval = approvalPolicy || prevMeta.approvalPolicy || 'on-request';
@@ -577,7 +579,7 @@ export class AppServerBridge {
           threadId: forkSourceId,
           excludeTurns: true,
           threadSource: 'user',
-          model: chosenModel,
+          ...(explicitModel ? { model: explicitModel } : {}),
           cwd: chosenCwd,
           approvalPolicy: chosenApproval,
           sandbox: chosenSandbox,
@@ -599,7 +601,7 @@ export class AppServerBridge {
             const res = await this.#rpc('thread/resume', {
               threadId,
               excludeTurns: true,
-              model: chosenModel,
+              ...(explicitModel ? { model: explicitModel } : {}),
               cwd: chosenCwd,
               approvalPolicy: chosenApproval,
               sandbox: chosenSandbox,
@@ -624,7 +626,7 @@ export class AppServerBridge {
 
       if (!threadId) {
         const startRes = await this.#rpc('thread/start', {
-          model: chosenModel,
+          ...(explicitModel ? { model: explicitModel } : {}),
           cwd: chosenCwd,
           ...(codexServerProjectId ? { projectId: codexServerProjectId } : {}),
           threadSource: 'user',
@@ -991,9 +993,10 @@ export class AppServerBridge {
     inputs.push({ type: 'text', text: effectiveText, text_elements: [] });
 
     try {
+      const explicitTurnModel = chosenModel && chosenModel !== 'auto' ? chosenModel : undefined;
       const turnRes = await this.#rpc('turn/start', {
         threadId,
-        model: chosenModel,
+        ...(explicitTurnModel ? { model: explicitTurnModel } : {}),
         effort: chosenEffort,
         cwd: chosenCwd,
         approvalPolicy: chosenApproval,
