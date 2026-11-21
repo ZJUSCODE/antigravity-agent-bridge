@@ -1,6 +1,6 @@
 {
   "name": "antigravity-agent-bridge",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "license": "MIT",
   "description": "Universal Multi-Agent Aux-Pane Roundtable & Peer Orchestration Plugin for Google Antigravity — Connect OpenAI Codex, Pi Agent, Claude Code, Gemini CLI, OpenCode & Custom CLI Agents",
   "repository": {

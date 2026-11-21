@@ -776,11 +776,15 @@
 
   $('btn-open-codex')?.addEventListener('click', async () => {
     try {
-      await apiPost('/api/open-in-codex', {
+      const res = await apiPost('/api/open-in-codex', {
         conversationId: hostConvId(),
         roomId: state.roomId || undefined,
       });
-      showToast('正在唤醒 OpenAI Codex 桌面端打开此线程…');
+      showToast(
+        res.projectMatched
+          ? `已在 Codex 桌面端实时唤起该线程（归属项目：${res.projectName}）`
+          : '已在 Codex 桌面端直接打开该线程（将该目录加入 Codex 左侧项目即可常驻列表）'
+      );
     } catch (err) {
       showToast(err.message);
     }

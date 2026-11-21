@@ -75,6 +75,17 @@ const codexAgentsMd = join(codexHome, 'AGENTS.md');
 const hasMarker = existsSync(codexAgentsMd) && readFileSync(codexAgentsMd, 'utf-8').includes('<!-- BEGIN ANTIGRAVITY PEER EXCHANGE -->');
 record(hasMarker, 'Peer Anti-Recursion Guard', hasMarker ? 'Installed' : 'Run `npm run setup` to wire peer rules', ciMode);
 
+const catalogDbPath = join(codexHome, 'sqlite', 'codex.db');
+if (existsSync(catalogDbPath)) {
+  const backfillRes = core.backfillCodexDesktopCatalog({ limit: 80 });
+  record(
+    true,
+    'Codex Desktop Catalog Sync',
+    `${catalogDbPath} (checked ${backfillRes.checkedCount}, synced ${backfillRes.syncedCount})`,
+    true
+  );
+}
+
 const hardFailures = checks.filter((c) => !c.ok && !c.optional);
 console.log('');
 if (hardFailures.length > 0) {

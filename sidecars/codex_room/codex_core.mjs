@@ -90,6 +90,7 @@ export function resetCoreCaches() {
   messagesCache.clear();
   globalLiveCache = { mtimeMs: -1, size: -1, data: null };
   stateDbCache = { key: '', ts: 0, value: { projects: [], threads: [] } };
+  codexGlobalProjectsCache = { mtimeMs: -1, projects: [] };
 }
 
 process.once('exit', () => {
@@ -293,6 +294,318 @@ export function getBrainRoot() {
 
 export function getCodexHome() {
   return process.env.CODEX_HOME || join(homedir(), '.codex');
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Codex Desktop `sqlite/codex.db` (`local_thread_catalog`) Live Sync
+// Ensures threads started/updated via standalone `codex app-server --stdio`
+// are immediately indexed in Codex Desktop's sidebar catalog database too.
+// ---------------------------------------------------------------------------
+let codexGlobalProjectsCache = { mtimeMs: -1, projects: [] };
+
+export function readCodexDesktopLocalProjects() {
+  const gsPath = join(getCodexHome(), '.codex-global-state.json');
+  if (!existsSync(gsPath)) return [];
+  try {
+    const st = statSync(gsPath);
+    if (codexGlobalProjectsCache.mtimeMs === st.mtimeMs) {
+      return codexGlobalProjectsCache.projects;
+    }
+    const raw = JSON.parse(readFileSync(gsPath, 'utf-8'));
+    const mapObj = raw?.['local-projects'];
+    const projects = [];
+    if (mapObj && typeof mapObj === 'object') {
+      for (const p of Object.values(mapObj)) {
+        if (!p || typeof p !== 'object') continue;
+        const roots = Array.isArray(p.rootPaths)
+          ? p.rootPaths.map((r) => stripWinPrefix(String(r || '').trim()).replace(/[\\/]+$/, '')).filter(Boolean)
+          : [];
+        if (roots.length > 0) {
+          projects.push({
+            id: String(p.id || ''),
+            name: String(p.name || basename(roots[0]) || ''),
+            rootPaths: roots,
+          });
+        }
+      }
+    }
+    codexGlobalProjectsCache = { mtimeMs: st.mtimeMs, projects };
+    return projects;
+  } catch {
+    return codexGlobalProjectsCache.projects || [];
+  }
+}
+
+export function getCodexDesktopProjectMatch(dirPath) {
+  const norm = normalizeDirPath(dirPath);
+  if (!norm) return { matched: false, projectId: null, projectName: null, canonicalRoot: null };
+  const targetKey = toPathKey(norm);
+  for (const p of readCodexDesktopLocalProjects()) {
+    for (const root of p.rootPaths) {
+      const rootKey = toPathKey(root);
+      const sepChar = root.includes('\\') ? '\\' : '/';
+      if (targetKey === rootKey || targetKey.startsWith(rootKey + sepChar)) {
+        return {
+          matched: true,
+          projectId: p.id || null,
+          projectName: p.name || basename(root),
+          canonicalRoot: root,
+        };
+      }
+    }
+  }
+  return { matched: false, projectId: null, projectName: null, canonicalRoot: null };
+}
+
+export function resolveCanonicalCodexProjectCwd(dirPath) {
+  const norm = normalizeDirPath(dirPath);
+  if (!norm) return norm;
+  const match = getCodexDesktopProjectMatch(norm);
+  if (match.matched && match.canonicalRoot) {
+    if (toPathKey(norm) === toPathKey(match.canonicalRoot)) {
+      return match.canonicalRoot;
+    }
+    const suffix = norm.slice(match.canonicalRoot.length);
+    return `${match.canonicalRoot}${suffix}`;
+  }
+  return norm;
+}
+
+function clampCatalogDisplayTitle(titleStr, fallbackStr = '') {
+  const raw = String(titleStr || fallbackStr || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '未命名对话';
+  return raw.length <= 80 ? raw : `${raw.slice(0, 79).trimEnd()} `;
+}
+
+export function syncCodexDesktopCatalogEntry({
+  threadId,
+  title,
+  cwd,
+  createdAtSec,
+  updatedAtSec,
+  recencyAtSec,
+  modelProvider,
+  gitBranch,
+} = {}) {
+  const cleanId = String(threadId || '').trim();
+  if (!SESSION_UUID_RE.test(cleanId)) return { synced: false, reason: 'invalid_thread_id' };
+
+  const codexHome = getCodexHome();
+  const catalogDbPath = join(codexHome, 'sqlite', 'codex.db');
+  if (!existsSync(catalogDbPath)) return { synced: false, reason: 'no_catalog_db' };
+
+  let stateRow = null;
+  const stateDbPath = join(codexHome, 'state_5.sqlite');
+  if (existsSync(stateDbPath)) {
+    let sdb;
+    try {
+      sdb = new DatabaseSync(stateDbPath, { readOnly: true, timeout: 1500 });
+      stateRow = sdb.prepare(`
+        SELECT id, source, archived, name, title, cwd, model_provider, git_branch,
+               created_at, updated_at, recency_at
+        FROM threads
+        WHERE id = ?
+      `).get(cleanId);
+    } catch {} finally {
+      try { sdb?.close(); } catch {}
+    }
+  }
+
+  if (stateRow) {
+    if (Number(stateRow.archived) !== 0) return { synced: false, reason: 'archived' };
+    if (stateRow.source === 'exec') return { synced: false, reason: 'exec_source' };
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const effCwdRaw = cwd || (stateRow ? stripWinPrefix(stateRow.cwd || '') : '');
+  const effCwd = effCwdRaw ? resolveCanonicalCodexProjectCwd(effCwdRaw) : '';
+  if (!effCwd) return { synced: false, reason: 'missing_cwd' };
+
+  const effTitle = clampCatalogDisplayTitle(
+    title || stateRow?.name || cleanThreadTitle(stateRow?.name, stateRow?.title),
+    cleanId
+  );
+  const effCreated = Number(createdAtSec) || Number(stateRow?.created_at) || nowSec;
+  const effUpdated = Math.max(effCreated, Number(updatedAtSec) || Number(stateRow?.updated_at) || nowSec);
+  const effRecency = Number(recencyAtSec) || Number(stateRow?.recency_at) || effUpdated;
+  const effProvider = String(modelProvider || stateRow?.model_provider || 'openai');
+  const effBranch = gitBranch !== undefined ? gitBranch : (stateRow?.git_branch ?? null);
+
+  let cdb;
+  try {
+    cdb = new DatabaseSync(catalogDbPath, { timeout: 3500 });
+    const cols = cdb.prepare('PRAGMA table_info(local_thread_catalog)').all();
+    if (!Array.isArray(cols) || cols.length === 0) {
+      return { synced: false, reason: 'missing_catalog_table' };
+    }
+    const colSet = new Set(cols.map((c) => c.name));
+    const hasSyncTable = Boolean(
+      cdb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_thread_catalog_sync_state'").get()
+    );
+    const hasHostsTable = Boolean(
+      cdb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_thread_catalog_hosts'").get()
+    );
+    const hasMetaTable = Boolean(
+      cdb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_thread_catalog_metadata'").get()
+    );
+
+    cdb.exec('BEGIN IMMEDIATE');
+    try {
+      if (hasHostsTable) {
+        cdb.prepare("INSERT OR IGNORE INTO local_thread_catalog_hosts (host_id, host_kind) VALUES ('local', 'local')").run();
+      }
+      let obsSeq = 1;
+      if (hasSyncTable) {
+        cdb.prepare("INSERT OR IGNORE INTO local_thread_catalog_sync_state (host_id) VALUES ('local')").run();
+        cdb.prepare("UPDATE local_thread_catalog_sync_state SET observation_sequence = observation_sequence + 1 WHERE host_id = 'local'").run();
+        const seqRow = cdb.prepare("SELECT observation_sequence FROM local_thread_catalog_sync_state WHERE host_id = 'local'").get();
+        obsSeq = Number(seqRow?.observation_sequence) || 1;
+      }
+
+      const record = {
+        host_id: 'local',
+        thread_id: cleanId,
+        display_title: effTitle,
+        source_created_at: effCreated,
+        source_updated_at: effUpdated,
+        source_recency_at: effRecency,
+        cwd: effCwd,
+        source_kind: 'vscode',
+        source_detail: null,
+        thread_source: 'user',
+        model_provider: effProvider,
+        git_branch: effBranch,
+        project_id: null,
+        conversation_origin: null,
+        trial_conversation_type: null,
+        chatgpt_async_status: null,
+        observation_sequence: obsSeq,
+        pending_observed_title: 0,
+        missing_candidate: 0,
+      };
+
+      const insertCols = Object.keys(record).filter((k) => colSet.has(k));
+      const placeholders = insertCols.map(() => '?').join(', ');
+      const updateClauses = insertCols
+        .filter((k) => k !== 'host_id' && k !== 'thread_id')
+        .map((k) => {
+          if (k === 'thread_source') return 'thread_source = COALESCE(excluded.thread_source, local_thread_catalog.thread_source)';
+          if (k === 'observation_sequence') return 'observation_sequence = MAX(local_thread_catalog.observation_sequence, excluded.observation_sequence)';
+          return `${k} = excluded.${k}`;
+        })
+        .join(', ');
+
+      cdb.prepare(`
+        INSERT INTO local_thread_catalog (${insertCols.join(', ')})
+        VALUES (${placeholders})
+        ON CONFLICT(host_id, thread_id) DO UPDATE SET ${updateClauses}
+      `).run(...insertCols.map((k) => record[k]));
+
+      let catalogRevision = 0;
+      if (hasMetaTable) {
+        cdb.prepare('INSERT OR IGNORE INTO local_thread_catalog_metadata (id) VALUES (1)').run();
+        cdb.prepare('UPDATE local_thread_catalog_metadata SET catalog_revision = catalog_revision + 1 WHERE id = 1').run();
+        const revRow = cdb.prepare('SELECT catalog_revision FROM local_thread_catalog_metadata WHERE id = 1').get();
+        catalogRevision = Number(revRow?.catalog_revision) || 0;
+      }
+
+      cdb.exec('COMMIT');
+      return {
+        synced: true,
+        threadId: cleanId,
+        cwd: effCwd,
+        displayTitle: effTitle,
+        observationSequence: obsSeq,
+        catalogRevision,
+      };
+    } catch (txErr) {
+      try { cdb.exec('ROLLBACK'); } catch {}
+      throw txErr;
+    }
+  } catch (err) {
+    return { synced: false, reason: err?.message || 'sqlite_error' };
+  } finally {
+    try { cdb?.close(); } catch {}
+  }
+}
+
+export function backfillCodexDesktopCatalog({ limit = 60 } = {}) {
+  const codexHome = getCodexHome();
+  const stateDbPath = join(codexHome, 'state_5.sqlite');
+  const catalogDbPath = join(codexHome, 'sqlite', 'codex.db');
+  if (!existsSync(stateDbPath) || !existsSync(catalogDbPath)) {
+    return { syncedCount: 0, checkedCount: 0 };
+  }
+
+  let candidates = [];
+  let sdb;
+  try {
+    sdb = new DatabaseSync(stateDbPath, { readOnly: true, timeout: 1500 });
+    candidates = sdb.prepare(`
+      SELECT id, name, title, cwd, model_provider, git_branch,
+             created_at, updated_at, recency_at
+      FROM threads
+      WHERE archived = 0
+        AND source = 'vscode'
+        AND (name LIKE '[双AI]%' OR title LIKE '%[PEER-EXCHANGE-FROM-ANTIGRAVITY%')
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(200, Number(limit) || 60)));
+  } catch {
+    return { syncedCount: 0, checkedCount: 0 };
+  } finally {
+    try { sdb?.close(); } catch {}
+  }
+
+  if (candidates.length === 0) return { syncedCount: 0, checkedCount: 0 };
+
+  const existingById = new Map();
+  let cdb;
+  try {
+    cdb = new DatabaseSync(catalogDbPath, { readOnly: true, timeout: 1500 });
+    for (const r of candidates) {
+      const row = cdb.prepare(`
+        SELECT thread_id, display_title, cwd, thread_source, source_updated_at, missing_candidate
+        FROM local_thread_catalog
+        WHERE host_id = 'local' AND thread_id = ?
+      `).get(r.id);
+      if (row) existingById.set(r.id, row);
+    }
+  } catch {} finally {
+    try { cdb?.close(); } catch {}
+  }
+
+  let syncedCount = 0;
+  for (const r of candidates) {
+    const canonCwd = resolveCanonicalCodexProjectCwd(stripWinPrefix(r.cwd || ''));
+    if (!canonCwd || canonCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) continue;
+    const desiredTitle = clampCatalogDisplayTitle(
+      r.name || formatCodexDesktopThreadName('', r.title),
+      r.id
+    );
+    const cur = existingById.get(r.id);
+    const needsSync = !cur
+      || Number(cur.missing_candidate) !== 0
+      || cur.thread_source !== 'user'
+      || cur.cwd !== canonCwd
+      || cur.display_title !== desiredTitle
+      || Number(cur.source_updated_at) < Number(r.updated_at);
+    if (!needsSync) continue;
+
+    const res = syncCodexDesktopCatalogEntry({
+      threadId: r.id,
+      title: desiredTitle,
+      cwd: canonCwd,
+      createdAtSec: r.created_at,
+      updatedAtSec: r.updated_at,
+      recencyAtSec: r.recency_at,
+      modelProvider: r.model_provider || 'openai',
+      gitBranch: r.git_branch ?? null,
+    });
+    if (res.synced) syncedCount++;
+  }
+
+  return { syncedCount, checkedCount: candidates.length };
 }
 
 export function getPluginDataDir() {
@@ -1481,7 +1794,15 @@ export function renameRoom(convId, newTitle) {
   const safe = assertValidExplicitRoomId(convId);
   const clean = String(newTitle || '').replace(/\s+/g, ' ').trim().slice(0, 60);
   if (!clean) throw new Error('标题不能为空');
-  return writeMeta(safe, { title: clean });
+  const nextMeta = writeMeta(safe, { title: clean });
+  if (nextMeta.codexThreadId) {
+    syncCodexDesktopCatalogEntry({
+      threadId: nextMeta.codexThreadId,
+      title: formatCodexDesktopThreadName(clean, ''),
+      cwd: nextMeta.cwd || undefined,
+    });
+  }
+  return nextMeta;
 }
 
 export function togglePinRoom(convId) {
@@ -2397,7 +2718,9 @@ export async function runCodexTurn({
       const inferredAgyCwd = (!cwd && !prevMeta.cwd)
         ? (queryAntigravityWorkspaceIndex().pathByConvId.get(safeConv) || null)
         : null;
-      const chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || inferredAgyCwd || ensureRoomDir(safeConv));
+      const chosenCwd = resolveCanonicalCodexProjectCwd(
+        cwd || prevMeta.cwd || inferredAgyCwd || ensureRoomDir(safeConv)
+      );
       mkdirSync(chosenCwd, { recursive: true });
       ensureUploadsDir(safeConv);
 
@@ -2578,6 +2901,13 @@ export async function runCodexTurn({
             activeTurn: null,
             lastError: null,
           });
+          if (resolvedThreadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
+            syncCodexDesktopCatalogEntry({
+              threadId: resolvedThreadId,
+              title: codexNamedTitle || formatCodexDesktopThreadName(finalMeta.title, bubbleText),
+              cwd: chosenCwd,
+            });
+          }
           resolveTurn({
             conversationId: safeConv,
             codexThreadId: resolvedThreadId,
@@ -2660,6 +2990,13 @@ export async function runCodexTurn({
             activeTurn: null,
             lastError: null,
           });
+          if (resolvedThreadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
+            syncCodexDesktopCatalogEntry({
+              threadId: resolvedThreadId,
+              title: codexNamedTitle || formatCodexDesktopThreadName(finalMeta.title, bubbleText),
+              cwd: chosenCwd,
+            });
+          }
 
           resolveTurn({
             conversationId: safeConv,
@@ -2998,6 +3335,13 @@ export async function runCodexTurn({
               }, 8000).then(() => {
                 codexNamedTitle = desiredName;
               }).catch(() => {});
+            }
+            if (resolvedThreadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
+              syncCodexDesktopCatalogEntry({
+                threadId: resolvedThreadId,
+                title: codexNamedTitle || desiredName,
+                cwd: chosenCwd,
+              });
             }
 
             flushSyncActive();

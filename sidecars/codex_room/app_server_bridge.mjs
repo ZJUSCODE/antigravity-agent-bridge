@@ -20,6 +20,7 @@ import {
   ensureRoomDir,
   ensureUploadsDir,
   findCodexBinary,
+  formatCodexDesktopThreadName,
   heartbeatRoomTurnLease,
   isLegacyExecThread,
   normalizeDirPath,
@@ -27,12 +28,14 @@ import {
   readMeta,
   registerInProcessBusyChecker,
   releaseRoomTurnLease,
+  resolveCanonicalCodexProjectCwd,
   resolveCodexServerProjectViaRpc,
   resolveDefaultCodexModel,
   sanitizeClientAttachments,
   sanitizeConvId,
   spawnCodexProcessWithRetry,
   stripWinPrefix,
+  syncCodexDesktopCatalogEntry,
   writeMeta,
 } from './codex_core.mjs';
 
@@ -536,7 +539,9 @@ export class AppServerBridge {
       const inferredAgyCwd = (!cwd && !prevMeta.cwd)
         ? (queryAntigravityWorkspaceIndex().pathByConvId.get(safeRoom) || null)
         : null;
-      chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || inferredAgyCwd || ensureRoomDir(safeRoom));
+      chosenCwd = resolveCanonicalCodexProjectCwd(
+        cwd || prevMeta.cwd || inferredAgyCwd || ensureRoomDir(safeRoom)
+      );
       mkdirSync(chosenCwd, { recursive: true });
       ensureUploadsDir(safeRoom);
 
@@ -646,9 +651,16 @@ export class AppServerBridge {
         }, 6000).catch(() => {});
       }
 
+      const desiredDesktopTitle = formatCodexDesktopThreadName(readMeta(safeRoom).title, rawText);
       if (createdOrForked) {
-        const roomTitle = deriveCleanRoomTitle(readMeta(safeRoom).title || rawText, 46) || '对讲室会话';
-        await this.#rpc('thread/name/set', { threadId, name: roomTitle }, 6000).catch(() => {});
+        await this.#rpc('thread/name/set', { threadId, name: desiredDesktopTitle }, 6000).catch(() => {});
+      }
+      if (threadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
+        syncCodexDesktopCatalogEntry({
+          threadId,
+          title: desiredDesktopTitle,
+          cwd: chosenCwd,
+        });
       }
 
       if (reservation.cancelRequested) {
@@ -916,7 +928,7 @@ export class AppServerBridge {
           steps: activeTurn.steps,
         }, { expectedEpoch: roomEpoch, requireExists: true });
 
-        releaseRoomTurnLease(safeRoom, leaseId, {
+        const settledMeta = releaseRoomTurnLease(safeRoom, leaseId, {
           codexThreadId: threadId,
           tokenUsage: tokenSummary,
           rateLimitPercent: bridgeSelf.#lastRateLimitPercent ?? prevMeta.rateLimitPercent ?? null,
@@ -924,6 +936,13 @@ export class AppServerBridge {
           activeTurn: null,
           lastError: null,
         });
+        if (threadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
+          syncCodexDesktopCatalogEntry({
+            threadId,
+            title: formatCodexDesktopThreadName(settledMeta.title, rawText),
+            cwd: chosenCwd,
+          });
+        }
       },
       finishCancelled() {
         if (!cleanup()) return;
@@ -943,12 +962,19 @@ export class AppServerBridge {
             steps: activeTurn.steps,
           }, { expectedEpoch: roomEpoch, requireExists: true });
         }
-        releaseRoomTurnLease(safeRoom, leaseId, {
+        const cancelledMeta = releaseRoomTurnLease(safeRoom, leaseId, {
           codexThreadId: threadId,
           status: 'idle',
           activeTurn: null,
           lastError: null,
         });
+        if (threadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
+          syncCodexDesktopCatalogEntry({
+            threadId,
+            title: formatCodexDesktopThreadName(cancelledMeta.title, rawText),
+            cwd: chosenCwd,
+          });
+        }
       },
       fail(errMsg) {
         if (!cleanup()) return;

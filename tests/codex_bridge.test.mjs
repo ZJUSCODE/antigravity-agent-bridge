@@ -659,4 +659,111 @@ describe('codex-bridge enterprise core & bridge suite', () => {
       if (prevClaude) process.env.CLAUDE_BIN = prevClaude; else delete process.env.CLAUDE_BIN;
     }
   });
+
+  it('syncs and backfills OpenAI Codex Desktop sqlite/codex.db local_thread_catalog with canonical project cwd', () => {
+    const canonProjA = core.normalizeDirPath(fakeProjectA);
+    writeFileSync(
+      join(fakeCodexHome, '.codex-global-state.json'),
+      JSON.stringify({
+        'local-projects': {
+          'proj-alpha-legacy-id': {
+            id: 'proj-alpha-legacy-id',
+            name: 'proj-alpha',
+            rootPaths: [canonProjA],
+          },
+        },
+      }),
+      'utf-8'
+    );
+
+    const catalogDir = join(fakeCodexHome, 'sqlite');
+    mkdirSync(catalogDir, { recursive: true });
+    const catalogDbPath = join(catalogDir, 'codex.db');
+    const cdb = new DatabaseSync(catalogDbPath);
+    cdb.exec(`
+      CREATE TABLE local_thread_catalog (
+        host_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        display_title TEXT NOT NULL,
+        source_created_at REAL NOT NULL,
+        source_updated_at REAL NOT NULL,
+        source_recency_at REAL NOT NULL DEFAULT 0,
+        cwd TEXT,
+        source_kind TEXT NOT NULL,
+        source_detail TEXT,
+        thread_source TEXT,
+        model_provider TEXT,
+        git_branch TEXT,
+        project_id TEXT,
+        conversation_origin TEXT,
+        trial_conversation_type TEXT,
+        chatgpt_async_status INTEGER,
+        observation_sequence INTEGER NOT NULL,
+        pending_observed_title INTEGER NOT NULL DEFAULT 0,
+        missing_candidate INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (host_id, thread_id)
+      );
+      CREATE TABLE local_thread_catalog_sync_state (
+        host_id TEXT PRIMARY KEY,
+        watermark_updated_at REAL,
+        initial_build_complete INTEGER NOT NULL DEFAULT 0,
+        observation_sequence INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE local_thread_catalog_hosts (
+        host_id TEXT PRIMARY KEY,
+        host_kind TEXT NOT NULL
+      );
+      CREATE TABLE local_thread_catalog_metadata (
+        id INTEGER PRIMARY KEY,
+        catalog_revision INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    cdb.close();
+
+    // Seed a `[双AI]` thread in state_5.sqlite and verify backfill + live sync
+    const stateDbPath = join(fakeCodexHome, 'state_5.sqlite');
+    const sdb = new DatabaseSync(stateDbPath);
+    sdb.exec('ALTER TABLE threads ADD COLUMN model_provider TEXT;');
+    sdb.exec('ALTER TABLE threads ADD COLUMN git_branch TEXT;');
+    sdb.exec('ALTER TABLE threads ADD COLUMN created_at INTEGER;');
+    sdb.exec('ALTER TABLE threads ADD COLUMN recency_at INTEGER;');
+    sdb.exec('ALTER TABLE threads ADD COLUMN source TEXT;');
+    sdb.prepare(`
+      INSERT INTO threads (id, name, title, cwd, rollout_path, model, reasoning_effort, updated_at, archived, source, created_at, recency_at, model_provider, git_branch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'vscode', ?, ?, 'openai', 'main')
+    `).run(
+      '01999999-aaaa-7bbb-8ccc-111122223333',
+      '[双AI] 订单拆库方案评审',
+      '[PEER-EXCHANGE-FROM-ANTIGRAVITY] 订单拆库方案评审',
+      canonProjA,
+      '',
+      'gpt-5',
+      'high',
+      1795256000,
+      1795255000,
+      1795256000
+    );
+    sdb.close();
+
+    const bf = core.backfillCodexDesktopCatalog({ limit: 20 });
+    assert.equal(bf.syncedCount, 1);
+
+    const verifyDb = new DatabaseSync(catalogDbPath, { readOnly: true });
+    const row = verifyDb.prepare("SELECT * FROM local_thread_catalog WHERE host_id = 'local' AND thread_id = ?")
+      .get('01999999-aaaa-7bbb-8ccc-111122223333');
+    assert.ok(row);
+    assert.equal(row.display_title, '[双AI] 订单拆库方案评审');
+    assert.equal(row.cwd, canonProjA);
+    assert.equal(row.source_kind, 'vscode');
+    assert.equal(row.thread_source, 'user');
+    assert.equal(row.missing_candidate, 0);
+
+    const metaRow = verifyDb.prepare('SELECT catalog_revision FROM local_thread_catalog_metadata WHERE id = 1').get();
+    assert.ok(Number(metaRow.catalog_revision) >= 1);
+    verifyDb.close();
+
+    const projMatch = core.getCodexDesktopProjectMatch(canonProjA);
+    assert.equal(projMatch.matched, true);
+    assert.equal(projMatch.projectName, 'proj-alpha');
+  });
 });

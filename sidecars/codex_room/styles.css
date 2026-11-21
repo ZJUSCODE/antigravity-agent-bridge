@@ -489,6 +489,37 @@ button { cursor: pointer; }
   color: var(--text-primary);
 }
 
+.toolbar-pill-btn {
+  height: 24px;
+  padding: 0 7px;
+  margin: 0 2px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--r-md);
+  background: var(--alpha-04);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.toolbar-pill-btn svg {
+  width: 11.5px;
+  height: 11.5px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.toolbar-pill-btn:hover {
+  background: var(--alpha-08);
+  border-color: var(--border-heavy);
+  color: var(--text-primary);
+}
+
 .toolbar-telemetry {
   height: 20px;
   padding: 0 6px;

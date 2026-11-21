@@ -12,6 +12,7 @@ import {
   addCustomProject,
   appendMessage,
   assertValidExplicitRoomId,
+  backfillCodexDesktopCatalog,
   createNewRoom,
   deleteRoom,
   deriveCleanRoomTitle,
@@ -20,6 +21,7 @@ import {
   findMirroredHubConvInDb,
   formatCodexDesktopThreadName,
   getActiveRoomForHost,
+  getCodexDesktopProjectMatch,
   getGlobalLiveDiscussion,
   getPluginDataDir,
   getProjectThreadTree,
@@ -46,6 +48,7 @@ import {
   saveUploadedFile,
   setActiveRoomForHost,
   switchToProject,
+  syncCodexDesktopCatalogEntry,
   togglePinRoom,
   waitForRoomChange,
   writeMeta,
@@ -508,7 +511,13 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
     if (!/^[0-9a-f]{8}-[0-9a-f-]{13,55}$/i.test(threadId)) {
       throw new Error('当前对话尚未生成有效的 Codex 线程 UUID');
     }
-    const deepUrl = `codex://threads/${threadId}`;
+    syncCodexDesktopCatalogEntry({
+      threadId,
+      title: meta.codexNamedTitle || formatCodexDesktopThreadName(meta.title, ''),
+      cwd: meta.cwd || undefined,
+    });
+    const projectMatch = getCodexDesktopProjectMatch(meta.cwd || '');
+    const deepUrl = `codex://threads/${encodeURIComponent(threadId)}?hostId=local`;
     if (process.platform === 'win32') {
       execFile('explorer.exe', [deepUrl], { windowsHide: true }, () => {});
     } else if (process.platform === 'darwin') {
@@ -516,7 +525,13 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
     } else {
       execFile('xdg-open', [deepUrl], () => {});
     }
-    return { ok: true, url: deepUrl, codexThreadId: threadId };
+    return {
+      ok: true,
+      url: deepUrl,
+      codexThreadId: threadId,
+      projectMatched: projectMatch.matched,
+      projectName: projectMatch.projectName,
+    };
   }, 'POST');
 
   return { app, bridge };
@@ -709,8 +724,11 @@ function startBackgroundFolderMirrorDaemon() {
     w.on('error', () => {});
   } catch {}
 
-  // Startup sweep: mirror existing completed peer discussions into their Antigravity folders!
+  // Startup sweep: reconcile Codex Desktop catalog DB & mirror completed discussions into Antigravity folders!
   const bootTimer = setTimeout(async () => {
+    try {
+      backfillCodexDesktopCatalog({ limit: 80 });
+    } catch {}
     try {
       const rooms = listRecentRooms(15);
       for (const r of rooms) {
