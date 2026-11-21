@@ -1,0 +1,12 @@
+# Runtime data, local room mappings & extracted proprietary WOFF2 font cache
+.data/
+node_modules/
+
+# Atomic write backups & temporary locks
+*.bak
+*.tmp
+.room.lock
+
+# OS artifacts
+.DS_Store
+Thumbs.db
