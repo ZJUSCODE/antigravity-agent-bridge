@@ -237,7 +237,7 @@ describe('codex-bridge enterprise core & bridge suite', () => {
   it('indexes state_5.sqlite projects/threads (stripping \\\\?\\) and arms safe auto-fork on import', () => {
     const dbSnap = core.queryCodexStateDb();
     assert.equal(dbSnap.projects.length, 2);
-    assert.equal(dbSnap.projects[0].path, fakeProjectA, 'must strip \\\\?\\ prefix');
+    assert.equal(dbSnap.projects[0].path, core.normalizeDirPath(fakeProjectA), 'must strip \\\\?\\ prefix and canonicalize');
     assert.equal(dbSnap.threads.length, 1);
     assert.equal(dbSnap.threads[0].title, '请检查数据管道并发锁');
 
@@ -258,7 +258,7 @@ describe('codex-bridge enterprise core & bridge suite', () => {
     // Switching to empty Project B creates a fresh project-bound room
     const swB = core.switchToProject('host_conv_1', fakeProjectB);
     assert.equal(swB.action, 'created_project_thread');
-    assert.equal(swB.snap.meta.cwd, fakeProjectB);
+    assert.equal(swB.snap.meta.cwd, core.normalizeDirPath(fakeProjectB));
   });
 
   it('auto-recovers orphaned stale external turns via watchdog', () => {
