@@ -21,6 +21,7 @@ const candidateCorePaths = [
   process.env.CODEX_BRIDGE_HOME ? join(process.env.CODEX_BRIDGE_HOME, 'sidecars', 'codex_room', 'codex_core.mjs') : '',
   resolve(__dirname, '..', '..', '..', 'sidecars', 'codex_room', 'codex_core.mjs'),
   join(homedir(), '.gemini', 'config', 'plugins', 'codex-bridge', 'sidecars', 'codex_room', 'codex_core.mjs'),
+  join(homedir(), '.gemini', 'config', 'plugins', 'antigravity-codex-bridge', 'sidecars', 'codex_room', 'codex_core.mjs'),
 ].filter(Boolean);
 
 const corePath = candidateCorePaths.find((p) => existsSync(p)) || candidateCorePaths[candidateCorePaths.length - 1];

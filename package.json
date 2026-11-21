@@ -5,9 +5,9 @@
   "description": "Native Antigravity Aux-Pane Sidecar & Symmetric Dual-Agent Orchestration Plugin for Google Antigravity <-> OpenAI Codex",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ZJUSCODE/codex-bridge.git"
+    "url": "https://github.com/ZJUSCODE/antigravity-codex-bridge.git"
   },
-  "homepage": "https://github.com/ZJUSCODE/codex-bridge",
+  "homepage": "https://github.com/ZJUSCODE/antigravity-codex-bridge",
   "keywords": [
     "antigravity",
     "antigravity-plugin",

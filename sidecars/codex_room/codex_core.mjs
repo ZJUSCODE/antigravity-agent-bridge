@@ -31,7 +31,10 @@ import {
 import { DatabaseSync } from 'node:sqlite';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+
+const __coreDir = dirname(fileURLToPath(import.meta.url));
 
 const CONV_ID_RE = /^[a-z0-9_.-]{4,100}$/i;
 const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f-]{13,55}$/i;
@@ -294,7 +297,7 @@ export function getCodexHome() {
 
 export function getPluginDataDir() {
   const dir = process.env.CODEX_BRIDGE_DATA_DIR
-    || join(homedir(), '.gemini', 'config', 'plugins', 'codex-bridge', '.data');
+    || resolve(__coreDir, '..', '..', '.data');
   mkdirSync(dir, { recursive: true });
   return dir;
 }

@@ -1,11 +1,11 @@
-# Codex Bridge (`codex-bridge` v4.0)
+# Antigravity Codex Bridge (`antigravity-codex-bridge` v4.0)
 
-[![CI](https://github.com/ZJUSCODE/codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ZJUSCODE/codex-bridge/actions/workflows/ci.yml)
+[![CI](https://github.com/ZJUSCODE/antigravity-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ZJUSCODE/antigravity-codex-bridge/actions/workflows/ci.yml)
 [![Node.js >= 22.5](https://img.shields.io/badge/node-%3E%3D22.5.0-5fa04e)](https://nodejs.org/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-007acc)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-**`codex-bridge`** 是一套面向 **Google Antigravity** 与 **OpenAI Codex** 的**零外部依赖、跨平台全栈多智能体插件与对等协同架构（Full-Stack Plugin + Native Sidecar UI + Symmetric Peer-Agent Kernel）**。
+**`antigravity-codex-bridge`**（插件 ID：`codex-bridge`）是一套面向 **Google Antigravity** 与 **OpenAI Codex** 的**零外部依赖、跨平台全栈多智能体插件与对等协同架构（Full-Stack Plugin + Native Sidecar UI + Symmetric Peer-Agent Kernel）**。
 
 无需安装第三方 `npm` 依赖，安装后即可在 Antigravity 右侧辅助栏（Auxiliary Side Pane）直接获得**与 Antigravity 原生界面及亮/暗主题 100% 实时融合**的「Codex 对讲室」，并打通 **Antigravity ↔ Codex 双向有状态协商、主从派工执行、对抗式代码互审与双端项目文件夹同步归档**。
 
@@ -58,7 +58,7 @@ flowchart TB
 
 **macOS / Linux / WSL 2 (Bash / Zsh)**：
 ```bash
-git clone https://github.com/ZJUSCODE/codex-bridge.git "$HOME/.gemini/config/plugins/codex-bridge"
+git clone https://github.com/ZJUSCODE/antigravity-codex-bridge.git "$HOME/.gemini/config/plugins/codex-bridge"
 cd "$HOME/.gemini/config/plugins/codex-bridge"
 npm run setup
 npm run doctor
@@ -66,7 +66,7 @@ npm run doctor
 
 **Windows (PowerShell)**：
 ```powershell
-git clone https://github.com/ZJUSCODE/codex-bridge.git "$HOME\.gemini\config\plugins\codex-bridge"
+git clone https://github.com/ZJUSCODE/antigravity-codex-bridge.git "$HOME\.gemini\config\plugins\codex-bridge"
 cd "$HOME\.gemini\config\plugins\codex-bridge"
 npm run setup
 npm run doctor
@@ -75,8 +75,8 @@ npm run doctor
 ### 方式 B：克隆至任意工作目录后一键同步安装
 
 ```bash
-git clone https://github.com/ZJUSCODE/codex-bridge.git
-cd codex-bridge
+git clone https://github.com/ZJUSCODE/antigravity-codex-bridge.git
+cd antigravity-codex-bridge
 npm run setup    # 自动同步插件至 ~/.gemini/config/plugins/codex-bridge 并配置 ~/.codex/skills/antigravity-chat
 npm run doctor   # 一键巡检本地双端可执行文件、模型配置与连接健康度
 ```

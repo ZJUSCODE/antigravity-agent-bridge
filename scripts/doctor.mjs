@@ -67,8 +67,12 @@ record(true, 'Default Codex Model', `${resolvedModel} (${models.length} model en
 
 // 5. Plugin & Bidirectional Skill Wiring
 const home = homedir();
-const pluginManifest = join(home, '.gemini', 'config', 'plugins', 'codex-bridge', 'plugin.json');
-record(existsSync(pluginManifest), 'Antigravity Plugin Dir', pluginManifest, ciMode);
+const pluginCandidates = [
+  join(home, '.gemini', 'config', 'plugins', 'codex-bridge', 'plugin.json'),
+  join(home, '.gemini', 'config', 'plugins', 'antigravity-codex-bridge', 'plugin.json'),
+];
+const foundPluginManifest = pluginCandidates.find((p) => existsSync(p)) || pluginCandidates[0];
+record(existsSync(foundPluginManifest), 'Antigravity Plugin Dir', foundPluginManifest, ciMode);
 
 const codexHome = core.getCodexHome();
 const codexSkillMd = join(codexHome, 'skills', 'antigravity-chat', 'SKILL.md');
