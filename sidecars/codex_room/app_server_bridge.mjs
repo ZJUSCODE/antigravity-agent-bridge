@@ -23,9 +23,11 @@ import {
   heartbeatRoomTurnLease,
   isLegacyExecThread,
   normalizeDirPath,
+  queryAntigravityWorkspaceIndex,
   readMeta,
   registerInProcessBusyChecker,
   releaseRoomTurnLease,
+  resolveCodexServerProjectViaRpc,
   sanitizeClientAttachments,
   sanitizeConvId,
   stripWinPrefix,
@@ -183,8 +185,8 @@ export class AppServerBridge {
     });
 
     await this.#rpc('initialize', {
-      clientInfo: { name: 'antigravity-codex-room', title: 'Antigravity Codex Room', version: '3.1.0' },
-      capabilities: null,
+      clientInfo: { name: 'Codex Desktop', title: 'Antigravity Codex Room', version: '3.3.0' },
+      capabilities: { experimentalApi: true, requestAttestation: false },
     }, 20000);
     this.#sendRaw({ jsonrpc: '2.0', method: 'initialized', params: {} });
 
@@ -537,7 +539,10 @@ export class AppServerBridge {
       chosenEffort = effort || prevMeta.effort || 'medium';
       chosenSandbox = sandbox || prevMeta.sandbox || 'workspace-write';
       chosenApproval = approvalPolicy || prevMeta.approvalPolicy || 'on-request';
-      chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || ensureRoomDir(safeRoom));
+      const inferredAgyCwd = (!cwd && !prevMeta.cwd)
+        ? (queryAntigravityWorkspaceIndex().pathByConvId.get(safeRoom) || null)
+        : null;
+      chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || inferredAgyCwd || ensureRoomDir(safeRoom));
       mkdirSync(chosenCwd, { recursive: true });
       ensureUploadsDir(safeRoom);
 
@@ -554,6 +559,10 @@ export class AppServerBridge {
       const shouldFork = explicitFork || promoteExecViaFork;
       const forkSourceId = explicitFork ? prevMeta.forkFromSessionId : (promoteExecViaFork ? rawCandidateResume : null);
       const desiredCfgKey = `${chosenModel}|${chosenSandbox}|${chosenApproval}|${chosenCwd.toLowerCase()}`;
+      const codexServerProjectId = await resolveCodexServerProjectViaRpc(
+        (m, p, t) => this.#rpc(m, p, t),
+        chosenCwd
+      );
 
       // 1. Append user message once verified
       appendMessage(safeRoom, {
@@ -569,17 +578,20 @@ export class AppServerBridge {
       // 2. Start / Fork / Resume thread (only clear fork source AFTER fork RPC succeeds!)
       threadId = (!newThread && !cwdChanged && !shouldFork) ? prevMeta.codexThreadId : null;
       let createdOrForked = false;
+      let currentThreadProjectId = null;
 
       if (shouldFork && forkSourceId) {
         const forkRes = await this.#rpc('thread/fork', {
           threadId: forkSourceId,
           excludeTurns: true,
+          threadSource: 'user',
           model: chosenModel,
           cwd: chosenCwd,
           approvalPolicy: chosenApproval,
           sandbox: chosenSandbox,
         });
         threadId = forkRes.thread.id;
+        currentThreadProjectId = forkRes.thread.projectId || null;
         createdOrForked = true;
         this.#loadedThreadConfigs.set(threadId, desiredCfgKey);
         if (explicitFork) {
@@ -601,6 +613,7 @@ export class AppServerBridge {
               sandbox: chosenSandbox,
             });
             threadId = res.thread.id;
+            currentThreadProjectId = res.thread.projectId || null;
             this.#loadedThreadConfigs.set(threadId, desiredCfgKey);
           } catch (resumeErr) {
             if (isThreadMissingError(resumeErr)) {
@@ -621,12 +634,22 @@ export class AppServerBridge {
         const startRes = await this.#rpc('thread/start', {
           model: chosenModel,
           cwd: chosenCwd,
+          ...(codexServerProjectId ? { projectId: codexServerProjectId } : {}),
+          threadSource: 'user',
           approvalPolicy: chosenApproval,
           sandbox: chosenSandbox,
         });
         threadId = startRes.thread.id;
+        currentThreadProjectId = startRes.thread.projectId || codexServerProjectId || null;
         createdOrForked = true;
         this.#loadedThreadConfigs.set(threadId, desiredCfgKey);
+      }
+
+      if (codexServerProjectId && currentThreadProjectId !== codexServerProjectId) {
+        await this.#rpc('thread/metadata/update', {
+          threadId,
+          projectId: codexServerProjectId,
+        }, 6000).catch(() => {});
       }
 
       if (createdOrForked) {

@@ -113,9 +113,118 @@ export function normalizeDirPath(p) {
   const clean = stripWinPrefix(p);
   if (!clean) return '';
   try {
-    return resolve(clean);
+    const abs = resolve(clean);
+    if (existsSync(abs)) {
+      try {
+        return stripWinPrefix(realpathSync.native(abs));
+      } catch {}
+    }
+    return process.platform === 'win32'
+      ? abs.replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`)
+      : abs;
   } catch {
     return clean;
+  }
+}
+
+export function isUserProjectFolder(dirPath) {
+  const norm = normalizeDirPath(dirPath);
+  if (!norm) return false;
+  const low = norm.toLowerCase();
+  const tmpLow = normalizeDirPath(tmpdir()).toLowerCase();
+  if (tmpLow && low.startsWith(tmpLow)) return false;
+  if (low.includes('\\.gemini\\') || low.includes('/.gemini/')) return false;
+  if (low.includes('\\.codex\\') || low.includes('/.codex/')) return false;
+  if (low.includes('codex-default\\')) return false;
+  if (low.endsWith('\\app\\resources') || low.includes('\\programs\\antigravity')) return false;
+  return true;
+}
+
+function decodeFileUriToPath(uriStr) {
+  let p = String(uriStr || '').trim();
+  if (!p) return '';
+  if (p.startsWith('file:///')) {
+    try {
+      p = decodeURIComponent(new URL(p).pathname).replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, sep);
+    } catch {}
+  }
+  return normalizeDirPath(p);
+}
+
+export function queryAntigravityWorkspaceIndex() {
+  const appData = process.env.ANTIGRAVITY_APP_DATA_DIR || join(homedir(), '.gemini', 'antigravity');
+  const dbPath = join(appData, 'conversation_summaries.db');
+  if (!existsSync(dbPath)) {
+    return { folders: [], projectIdByPath: new Map(), pathByConvId: new Map() };
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true, timeout: 1000 });
+    const rows = db.prepare(`
+      SELECT conversation_id, project_id, workspace_uris
+      FROM conversation_summaries
+      WHERE workspace_uris != ''
+      ORDER BY last_modified_time DESC
+      LIMIT 300
+    `).all();
+    const projectIdByPath = new Map();
+    const pathByConvId = new Map();
+    const folders = [];
+    const seenFolder = new Set();
+
+    for (const r of rows) {
+      let uris = [];
+      try { uris = JSON.parse(r.workspace_uris); } catch {}
+      if (!Array.isArray(uris) || uris.length === 0) continue;
+      const firstPath = decodeFileUriToPath(uris[0]);
+      if (!firstPath || !isUserProjectFolder(firstPath)) continue;
+      const low = firstPath.toLowerCase();
+
+      if (r.conversation_id && !pathByConvId.has(r.conversation_id)) {
+        pathByConvId.set(r.conversation_id, firstPath);
+      }
+      const pid = String(r.project_id || '').trim();
+      if (pid && pid !== 'outside-of-project' && pid !== 'default-cli-project' && !projectIdByPath.has(low)) {
+        projectIdByPath.set(low, pid);
+      }
+      if (!seenFolder.has(low) && existsSync(firstPath)) {
+        seenFolder.add(low);
+        folders.push({
+          name: basename(firstPath) || firstPath,
+          path: firstPath,
+          projectId: projectIdByPath.get(low) || null,
+        });
+      }
+    }
+    return { folders, projectIdByPath, pathByConvId };
+  } catch {
+    return { folders: [], projectIdByPath: new Map(), pathByConvId: new Map() };
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
+export async function resolveCodexServerProjectViaRpc(sendRpcFn, chosenCwd) {
+  const normCwd = normalizeDirPath(chosenCwd);
+  if (!isUserProjectFolder(normCwd)) return null;
+  const targetLow = normCwd.toLowerCase();
+  try {
+    const listRes = await sendRpcFn('project/list', { cursor: null, limit: 100 }, 10000);
+    const items = Array.isArray(listRes?.data) ? listRes.data : [];
+    for (const proj of items) {
+      const roots = Array.isArray(proj?.roots) ? proj.roots : [];
+      if (roots.some((r) => normalizeDirPath(r?.path || '').toLowerCase() === targetLow)) {
+        return proj.id || null;
+      }
+    }
+    const created = await sendRpcFn('project/create', {
+      name: basename(normCwd) || normCwd,
+      roots: [{ path: normCwd }],
+      idempotencyKey: `agy-folder:${targetLow}`,
+    }, 10000);
+    return created?.project?.id || null;
+  } catch {
+    return null;
   }
 }
 
@@ -1673,6 +1782,11 @@ export function listAvailableProjects(extraPaths = []) {
     addDir(dp.path, 'Codex 项目', dp.name);
   }
 
+  const { folders: agyFolders } = queryAntigravityWorkspaceIndex();
+  for (const af of agyFolders) {
+    addDir(af.path, 'Antigravity 项目', af.name);
+  }
+
   const customFile = join(getPluginDataDir(), 'custom_projects.json');
   if (existsSync(customFile)) {
     try {
@@ -2026,7 +2140,10 @@ export async function runCodexTurn({
       const chosenModel = model || prevMeta.model || 'gpt-6.2-astra';
       const chosenEffort = effort || prevMeta.effort || 'medium';
       const chosenSandbox = sandbox || prevMeta.sandbox || 'workspace-write';
-      const chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || ensureRoomDir(safeConv));
+      const inferredAgyCwd = (!cwd && !prevMeta.cwd)
+        ? (queryAntigravityWorkspaceIndex().pathByConvId.get(safeConv) || null)
+        : null;
+      const chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || inferredAgyCwd || ensureRoomDir(safeConv));
       mkdirSync(chosenCwd, { recursive: true });
       ensureUploadsDir(safeConv);
 
@@ -2535,12 +2652,12 @@ export async function runCodexTurn({
           }
         });
 
-        // Drive JSON-RPC handshake -> thread setup -> title sync -> turn/start
+        // Drive JSON-RPC handshake -> project folder binding -> thread setup -> title sync -> turn/start
         (async () => {
           try {
             await sendRpc('initialize', {
-              clientInfo: { name: 'antigravity-codex-peer', title: 'Antigravity Peer Bridge', version: '3.2.0' },
-              capabilities: null,
+              clientInfo: { name: 'Codex Desktop', title: 'Codex Desktop', version: '3.3.0' },
+              capabilities: { experimentalApi: true, requestAttestation: false },
             }, 20000);
             sendRaw({ jsonrpc: '2.0', method: 'initialized', params: {} });
 
@@ -2549,18 +2666,23 @@ export async function runCodexTurn({
               return;
             }
 
+            const codexServerProjectId = await resolveCodexServerProjectViaRpc(sendRpc, chosenCwd);
+
             let createdOrForked = false;
+            let currentThreadProjectId = null;
             if (shouldFork && forkSourceId) {
               try {
                 const forkRes = await sendRpc('thread/fork', {
                   threadId: forkSourceId,
                   excludeTurns: true,
+                  threadSource: 'user',
                   model: chosenModel,
                   cwd: chosenCwd,
                   approvalPolicy: 'never',
                   sandbox: chosenSandbox,
                 });
                 resolvedThreadId = forkRes.thread.id;
+                currentThreadProjectId = forkRes.thread.projectId || null;
                 createdOrForked = true;
                 if (explicitFork) {
                   appendMessage(safeConv, {
@@ -2587,6 +2709,7 @@ export async function runCodexTurn({
                   sandbox: chosenSandbox,
                 });
                 resolvedThreadId = res.thread.id;
+                currentThreadProjectId = res.thread.projectId || null;
               } catch (resumeErr) {
                 if (isMissingCodexThreadErr(resumeErr)) {
                   resolvedThreadId = null;
@@ -2600,11 +2723,21 @@ export async function runCodexTurn({
               const startRes = await sendRpc('thread/start', {
                 model: chosenModel,
                 cwd: chosenCwd,
+                ...(codexServerProjectId ? { projectId: codexServerProjectId } : {}),
+                threadSource: 'user',
                 approvalPolicy: 'never',
                 sandbox: chosenSandbox,
               });
               resolvedThreadId = startRes.thread.id;
+              currentThreadProjectId = startRes.thread.projectId || codexServerProjectId || null;
               createdOrForked = true;
+            }
+
+            if (codexServerProjectId && currentThreadProjectId !== codexServerProjectId) {
+              await sendRpc('thread/metadata/update', {
+                threadId: resolvedThreadId,
+                projectId: codexServerProjectId,
+              }, 8000).catch(() => {});
             }
 
             const desiredName = formatCodexDesktopThreadName(updatedRoomMeta?.title || readMeta(safeConv).title, bubbleText);
@@ -2797,7 +2930,9 @@ export function buildPeerEnvelope({
   const displayBody = cleanBody.length > 4000 ? `${cleanBody.slice(0, 4000)}\n\n*(长上下文已折叠进后台协议载荷)*` : cleanBody;
   const displayText = `${displayPrefix}${displayBody}${filesNote}`;
 
+  const headlineTopic = deriveCleanRoomTitle(cleanBody, 48) || proto.tag;
   const wireParts = [
+    `# [双AI] ${headlineTopic}`,
     `[PEER-EXCHANGE-FROM-${fromAgent.toUpperCase()} | TO: ${toAgent} | PROTOCOL: ${protocol.toUpperCase()}${round ? ` | ROUND: ${round}` : ''}]`,
     `你正在与本地同侪智能体 **${fromAgent}** 进行专业工程对等协商。注意：当前处于被调用端，请直接输出你的独立专业结论，**严禁**反向调用同侪桥接脚本（防止递归死循环）。`,
     `### 本轮协作规程（${proto.tag}）\n${proto.guide}`,
@@ -2950,13 +3085,17 @@ export async function runAntigravityTurn({
       }, { expectedEpoch: roomEpoch, expectedLeaseId: leaseId, requireExists: true });
 
       // Spill prompts >12KB into a per-turn isolated temp subdirectory (zero cross-room sharing!)
+      const headlineForSpill = deriveCleanRoomTitle(bubbleText, 48) || '同侪技术协商';
       let promptArg = rawText;
       if (rawText.length > 12000) {
         spillDir = createIsolatedPromptSpillDir();
         const tempPromptFile = join(spillDir, 'prompt.md');
         writeFileSync(tempPromptFile, rawText, { encoding: 'utf-8', mode: 0o600 });
-        promptArg = `请完整读取文件 ${tempPromptFile} 中的同侪协商上下文与代码变更，并严格按照其中的协作规程直接回复。`;
+        promptArg = `# [双AI] ${headlineForSpill}\n\n[PEER-EXCHANGE-FROM-${sender.toUpperCase()}] 请完整读取文件 ${tempPromptFile} 中的同侪协商上下文与代码变更，并严格按照其中的协作规程直接回复。`;
       }
+
+      const agyWorkspaceIdx = queryAntigravityWorkspaceIndex();
+      const matchedAgyProjectId = agyWorkspaceIdx.projectIdByPath.get(chosenCwd.toLowerCase()) || null;
 
       const args = [
         '--output-format=json',
@@ -2964,6 +3103,11 @@ export async function runAntigravityTurn({
         `--effort=${effort || 'medium'}`,
         `--add-dir=${chosenCwd}`,
       ];
+      if (matchedAgyProjectId) {
+        args.push(`--project=${matchedAgyProjectId}`);
+      } else if (!agyConvToResume && isUserProjectFolder(chosenCwd)) {
+        args.push('--new-project');
+      }
       if (spillDir) args.push(`--add-dir=${spillDir}`);
       if (model) args.push(`--model=${model}`);
       if (agyConvToResume) args.push(`--conversation=${agyConvToResume}`);

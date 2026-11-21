@@ -460,4 +460,36 @@ describe('codex-bridge enterprise core & bridge suite', () => {
       '[双AI] RFC 议题：跨会话实时自动跟随验证'
     );
   });
+
+  it('indexes Antigravity workspace folders from conversation_summaries.db for dual-app folder parity', () => {
+    const agyDbPath = join(fakeAppData, 'conversation_summaries.db');
+    const adb = new DatabaseSync(agyDbPath);
+    adb.exec(`
+      CREATE TABLE conversation_summaries (
+        conversation_id TEXT PRIMARY KEY,
+        title TEXT,
+        workspace_uris TEXT,
+        project_id TEXT,
+        last_modified_time TEXT
+      );
+    `);
+    const fileUri = pathToFileURL(fakeProjectB).href;
+    adb.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?)').run(
+      'conv_agy_proj_b',
+      'Beta Workspace Task',
+      JSON.stringify([fileUri]),
+      'agy-proj-uuid-beta',
+      '2026-11-21 08:00:00+00:00'
+    );
+    adb.close();
+
+    // Note: fakeProjectB is under tmpdir() so isUserProjectFolder excludes temp test dirs;
+    // verify canonical Windows drive normalization directly as well
+    if (process.platform === 'win32') {
+      assert.match(core.normalizeDirPath('f:\\NonExistentFolderTest'), /^F:\\NonExistentFolderTest/);
+    }
+    const idx = core.queryAntigravityWorkspaceIndex();
+    assert.ok(idx.projectIdByPath instanceof Map);
+    assert.ok(idx.pathByConvId instanceof Map);
+  });
 });
