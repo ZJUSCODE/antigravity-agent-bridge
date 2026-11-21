@@ -17,6 +17,7 @@ import {
   exportRoomMarkdown,
   findCodexBinary,
   getActiveRoomForHost,
+  getGlobalLiveDiscussion,
   getPluginDataDir,
   getProjectThreadTree,
   getRoomSnapshot,
@@ -323,12 +324,16 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
       return waitForRoomChange(roomId, String(data.etag), getUiVersion, data.timeoutMs || 8000);
     }
     const snap = getRoomSnapshot(roomId);
+    const liveDiscussion = getGlobalLiveDiscussion();
+    const otherLiveSig = (liveDiscussion && liveDiscussion.roomId !== roomId)
+      ? `${liveDiscussion.roomId}:${liveDiscussion.status}:${liveDiscussion.leaseStartedAt || 0}:${liveDiscussion.updatedAt || 0}`
+      : 'self';
     const uiVersion = getUiVersion();
-    const fullEtag = `${snap.etag}:${uiVersion}`;
+    const fullEtag = `${snap.etag}:${otherLiveSig}:${uiVersion}`;
     if (data.etag && data.etag === fullEtag) {
-      return { conversationId: roomId, unchanged: true, etag: fullEtag, uiVersion };
+      return { conversationId: roomId, unchanged: true, liveDiscussion, etag: fullEtag, uiVersion };
     }
-    return { ...snap, etag: fullEtag, uiVersion };
+    return { ...snap, liveDiscussion, etag: fullEtag, uiVersion };
   }, 'GET');
 
   app.api('/api/settings', (data) => {

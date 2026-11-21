@@ -27,6 +27,20 @@
 
   const MAX_CLIENT_UPLOAD_BYTES = 20 * 1024 * 1024;
 
+  function readAutoFollowPref() {
+    try {
+      return localStorage.getItem('codex_room_auto_follow') !== '0';
+    } catch {
+      return true;
+    }
+  }
+
+  function saveAutoFollowPref(val) {
+    try {
+      localStorage.setItem('codex_room_auto_follow', val ? '1' : '0');
+    } catch {}
+  }
+
   const state = {
     viewEpoch: 1,
     etag: '',
@@ -48,6 +62,12 @@
     firstRender: true,
     openPopover: null,
     errorStreak: 0,
+    autoFollowLive: readAutoFollowPref(),
+    bootSynced: false,
+    seenLiveUpdatedAt: 0,
+    manualHoldLiveKey: '',
+    liveDiscussion: null,
+    switchingLive: false,
   };
 
   function getDraftBucket(roomId) {
@@ -603,6 +623,7 @@
   $('btn-mode').addEventListener('click', (e) => { e.stopPropagation(); togglePopover('pop-mode', renderModeMenu); });
 
   async function switchProject(targetPath) {
+    markManualRoomNavigation();
     const res = await apiPost('/api/projects/switch', {
       conversationId: hostConvId(),
       path: targetPath,
@@ -902,8 +923,77 @@
     restoreIncomingDraft(state.roomId);
   }
 
+  function liveTurnKey(live) {
+    if (!live || !live.roomId) return '';
+    return `${live.roomId}:${live.leaseStartedAt || live.updatedAt || 0}`;
+  }
+
+  function markManualRoomNavigation() {
+    state.bootSynced = true;
+    if (state.liveDiscussion) {
+      state.manualHoldLiveKey = liveTurnKey(state.liveDiscussion);
+      state.seenLiveUpdatedAt = Math.max(state.seenLiveUpdatedAt, Number(state.liveDiscussion.updatedAt) || 0);
+    }
+  }
+
+  function syncAutoFollowButton() {
+    const btn = $('btn-auto-follow');
+    if (!btn) return;
+    btn.classList.toggle('auto-follow-on', Boolean(state.autoFollowLive));
+    btn.title = state.autoFollowLive
+      ? '自动跟随实时讨论：已开启（任意对话发起双 AI 协商时自动切入直播，点击可锁定当前视图）'
+      : '自动跟随实时讨论：已锁定当前对话（点击开启自动跟随）';
+  }
+
+  async function jumpToLiveRoom(live, toastMsg) {
+    if (!live?.roomId || state.switchingLive) return;
+    state.switchingLive = true;
+    try {
+      $('live-radar-banner').classList.add('hidden');
+      state.manualHoldLiveKey = '';
+      state.seenLiveUpdatedAt = Math.max(state.seenLiveUpdatedAt, Number(live.updatedAt) || 0);
+      const res = await apiPost('/api/threads/select', {
+        conversationId: hostConvId(),
+        roomId: live.roomId,
+      });
+      resetRoomViewState(res.roomId || live.roomId);
+      if (toastMsg) {
+        showToast(`${toastMsg}：${live.title || '双 AI 协商'}`, 2400);
+      }
+      setTimeout(() => { triggerImmediateRefresh().catch(() => {}); }, 10);
+    } catch {} finally {
+      state.switchingLive = false;
+    }
+  }
+
+  $('btn-auto-follow').addEventListener('click', () => {
+    state.autoFollowLive = !state.autoFollowLive;
+    saveAutoFollowPref(state.autoFollowLive);
+    syncAutoFollowButton();
+    if (state.autoFollowLive) {
+      state.manualHoldLiveKey = '';
+      const live = state.liveDiscussion;
+      if (live && live.roomId && live.roomId !== state.roomId && (live.status === 'thinking' || live.status === 'awaiting_approval')) {
+        jumpToLiveRoom(live, '已切入实时讨论');
+        return;
+      }
+      showToast('已开启自动跟随实时讨论');
+    } else {
+      showToast('已锁定当前视图（后台新讨论将以顶部横幅提示）');
+    }
+  });
+
+  $('btn-jump-live').addEventListener('click', () => {
+    if (state.liveDiscussion?.roomId) {
+      jumpToLiveRoom(state.liveDiscussion, '已切入实时讨论');
+    }
+  });
+
+  syncAutoFollowButton();
+
   async function handleCreateNewThread(overrideCwd) {
     closeDrawer();
+    markManualRoomNavigation();
     const targetCwd = typeof overrideCwd === 'string' ? overrideCwd : (state.meta?.cwd || null);
     const res = await apiPost('/api/threads/create', {
       conversationId: hostConvId(),
@@ -1416,6 +1506,58 @@
         return;
       }
       if (snap.uiVersion) state.uiVersion = snap.uiVersion;
+
+      // Global Live Discussion Radar & Auto-Follow across conversations
+      if ('liveDiscussion' in snap) {
+        state.liveDiscussion = snap.liveDiscussion || null;
+        const live = state.liveDiscussion;
+        const curRoom = snap.conversationId || state.roomId;
+        const banner = $('live-radar-banner');
+
+        if (live && live.roomId && live.roomId !== curRoom) {
+          const liveKey = liveTurnKey(live);
+          const isLiveBusy = live.status === 'thinking' || live.status === 'awaiting_approval';
+          const liveTs = Number(live.updatedAt) || 0;
+          const curTs = Number(snap.meta?.updatedAt ?? state.meta?.updatedAt) || 0;
+          const isFreshActivity = !state.bootSynced
+            ? (liveTs > curTs && Date.now() - liveTs < 45 * 60 * 1000)
+            : (liveTs > state.seenLiveUpdatedAt);
+
+          state.seenLiveUpdatedAt = Math.max(state.seenLiveUpdatedAt, liveTs);
+          state.bootSynced = true;
+
+          const curStatus = snap.meta?.status ?? state.meta?.status;
+          const curBusy = curStatus === 'thinking' || curStatus === 'awaiting_approval';
+          const hasUnsentInput = Boolean($('composer-input')?.value.trim()) || currentAttachments().length > 0;
+
+          if (
+            state.autoFollowLive &&
+            !curBusy &&
+            !hasUnsentInput &&
+            !state.switchingLive &&
+            state.manualHoldLiveKey !== liveKey &&
+            (isLiveBusy || isFreshActivity)
+          ) {
+            await jumpToLiveRoom(live, isLiveBusy ? '已自动切入实时讨论' : '已自动同步至最新讨论');
+            return;
+          }
+
+          if (isLiveBusy && banner) {
+            const projSuffix = live.projectName ? ` · ${live.projectName}` : '';
+            $('live-radar-text').textContent = `正在实时讨论：${live.title || '双 AI 协商'}${projSuffix}`;
+            banner.classList.remove('hidden');
+          } else if (banner) {
+            banner.classList.add('hidden');
+          }
+        } else {
+          state.bootSynced = true;
+          if (live?.updatedAt) {
+            state.seenLiveUpdatedAt = Math.max(state.seenLiveUpdatedAt, Number(live.updatedAt) || 0);
+          }
+          if (banner) banner.classList.add('hidden');
+        }
+      }
+
       if (snap.unchanged) return;
       // Reject out-of-order regressive snapshots within the same room
       if (
@@ -1787,6 +1929,7 @@
     const selRoom = e.target.closest('[data-select-room]');
     if (selRoom && !e.target.closest('.drawer-rename-input')) {
       closeDrawer();
+      markManualRoomNavigation();
       const res = await apiPost('/api/threads/select', { conversationId: hostConvId(), roomId: selRoom.dataset.selectRoom });
       resetRoomViewState(res.roomId);
       await triggerImmediateRefresh();
@@ -1797,6 +1940,7 @@
     const impCodex = e.target.closest('[data-import-codex]');
     if (impCodex) {
       closeDrawer();
+      markManualRoomNavigation();
       showToast('正在加载并准备安全分支…');
       const res = await apiPost('/api/threads/import-codex', {
         conversationId: hostConvId(),
@@ -1820,6 +1964,12 @@
       if (msg) await copyText(msg.text || '', '已复制回复');
     }
   });
+
+  if (typeof window.sidecar?.onWorkspaceChange === 'function') {
+    window.sidecar.onWorkspaceChange(() => {
+      loadCatalog().catch(() => {});
+    });
+  }
 
   (async () => {
     await loadCatalog();

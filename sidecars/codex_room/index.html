@@ -90,6 +90,14 @@
         <span id="conn-dot" class="conn-dot hidden" title="连接重连中…"></span>
         <span id="toolbar-telemetry" class="toolbar-telemetry hidden"></span>
 
+        <button id="btn-auto-follow" type="button" class="toolbar-icon-btn auto-follow-on" title="自动跟随实时讨论（开启后，任意对话触发双 AI 协商将自动切入直播）" aria-label="自动跟随实时讨论">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="2"/>
+            <path d="M4.9 4.9a4.4 4.4 0 0 0 0 6.2M11.1 4.9a4.4 4.4 0 0 1 0 6.2"/>
+            <path d="M2.8 2.8a7.3 7.3 0 0 0 0 10.4M13.2 2.8a7.3 7.3 0 0 1 0 10.4"/>
+          </svg>
+        </button>
+
         <button id="btn-export" type="button" class="toolbar-icon-btn" title="导出对话为 Markdown (保存至 E:\Antigravity\Outputs 并复制)" aria-label="导出对话">
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M8 2.5v7.5m0 0L5.25 7.25M8 10l2.75-2.75"/>
@@ -105,6 +113,12 @@
         </button>
       </div>
     </header>
+
+    <div id="live-radar-banner" class="live-radar-banner hidden" role="status">
+      <span class="live-radar-dot" aria-hidden="true"></span>
+      <span id="live-radar-text" class="live-radar-text"></span>
+      <button id="btn-jump-live" type="button" class="live-radar-btn">实时围观</button>
+    </div>
 
     <!-- Thread Canvas -->
     <main id="thread-scroll" class="thread-scroll">

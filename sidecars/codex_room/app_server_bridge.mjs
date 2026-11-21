@@ -16,11 +16,14 @@ import { randomUUID } from 'node:crypto';
 import {
   acquireRoomTurnLease,
   appendMessage,
+  deriveCleanRoomTitle,
   ensureRoomDir,
   ensureUploadsDir,
   findCodexBinary,
   heartbeatRoomTurnLease,
+  isLegacyExecThread,
   normalizeDirPath,
+  readMeta,
   registerInProcessBusyChecker,
   releaseRoomTurnLease,
   sanitizeClientAttachments,
@@ -545,7 +548,11 @@ export class AppServerBridge {
       }
 
       const cwdChanged = prevMeta.cwd && normalizeDirPath(prevMeta.cwd).toLowerCase() !== chosenCwd.toLowerCase();
-      const shouldFork = !newThread && !cwdChanged && Boolean(prevMeta.needsForkOnNextTurn && prevMeta.forkFromSessionId);
+      const explicitFork = !newThread && !cwdChanged && Boolean(prevMeta.needsForkOnNextTurn && prevMeta.forkFromSessionId);
+      const rawCandidateResume = (!newThread && !cwdChanged && !explicitFork) ? prevMeta.codexThreadId : null;
+      const promoteExecViaFork = Boolean(rawCandidateResume && isLegacyExecThread(rawCandidateResume));
+      const shouldFork = explicitFork || promoteExecViaFork;
+      const forkSourceId = explicitFork ? prevMeta.forkFromSessionId : (promoteExecViaFork ? rawCandidateResume : null);
       const desiredCfgKey = `${chosenModel}|${chosenSandbox}|${chosenApproval}|${chosenCwd.toLowerCase()}`;
 
       // 1. Append user message once verified
@@ -561,10 +568,11 @@ export class AppServerBridge {
 
       // 2. Start / Fork / Resume thread (only clear fork source AFTER fork RPC succeeds!)
       threadId = (!newThread && !cwdChanged && !shouldFork) ? prevMeta.codexThreadId : null;
+      let createdOrForked = false;
 
-      if (shouldFork && prevMeta.forkFromSessionId) {
+      if (shouldFork && forkSourceId) {
         const forkRes = await this.#rpc('thread/fork', {
-          threadId: prevMeta.forkFromSessionId,
+          threadId: forkSourceId,
           excludeTurns: true,
           model: chosenModel,
           cwd: chosenCwd,
@@ -572,12 +580,15 @@ export class AppServerBridge {
           sandbox: chosenSandbox,
         });
         threadId = forkRes.thread.id;
+        createdOrForked = true;
         this.#loadedThreadConfigs.set(threadId, desiredCfgKey);
-        appendMessage(safeRoom, {
-          sender: 'system',
-          senderLabel: '系统',
-          text: `已从历史会话 (${prevMeta.forkFromSessionId.slice(0, 8)}…) 自动 Fork 安全分支，避免与 Codex 桌面端争抢写锁`,
-        }, { expectedEpoch: roomEpoch, requireExists: true });
+        if (explicitFork) {
+          appendMessage(safeRoom, {
+            sender: 'system',
+            senderLabel: '系统',
+            text: `已从历史会话 (${forkSourceId.slice(0, 8)}…) 自动 Fork 安全分支，避免与 Codex 桌面端争抢写锁`,
+          }, { expectedEpoch: roomEpoch, requireExists: true });
+        }
       } else if (threadId) {
         if (this.#loadedThreadConfigs.get(threadId) !== desiredCfgKey) {
           try {
@@ -614,7 +625,13 @@ export class AppServerBridge {
           sandbox: chosenSandbox,
         });
         threadId = startRes.thread.id;
+        createdOrForked = true;
         this.#loadedThreadConfigs.set(threadId, desiredCfgKey);
+      }
+
+      if (createdOrForked) {
+        const roomTitle = deriveCleanRoomTitle(readMeta(safeRoom).title || rawText, 46) || '对讲室会话';
+        await this.#rpc('thread/name/set', { threadId, name: roomTitle }, 6000).catch(() => {});
       }
 
       if (reservation.cancelRequested) {

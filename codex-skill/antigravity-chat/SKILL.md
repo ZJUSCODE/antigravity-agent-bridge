@@ -17,9 +17,9 @@ metadata:
    - `debug`：疑难故障双盲根因假设与最小证伪实验对比。
    - `audit`：对照原始需求与真实 Diff 做洁净室独立核对。
    - `free`：自由技术交流。
-2. **有状态多轮往返（默认 2 轮，上限 4 轮）**：
-   - 第 1 轮：将包含关键代码路径与判断依据的文本写入临时 UTF-8 文件（避免 Windows 引号与换行转义破坏），运行 `talk_antigravity.mjs` 发起协商。相同 `--cwd`（或显式 `--room`）会自动复用同一个 `agyConversationId` 保持多轮上下文。
-   - 第 2 轮：核实 Antigravity 的反馈与末尾标记（`[PEER_STATUS: CONVERGED | NEEDS_ROUND]` 或 `[PEER_VERDICT: PASS | CHANGES_REQUIRED]`）。对有效反例做修正或据理反驳，继续下一轮直至收敛。
+2. **有状态多轮往返与逐轮透明播报（默认 2 轮，上限 4 轮）**：
+   - 第 1 轮前：先在对话流用 1-2 句话告知用户即将向 Antigravity 发起的讨论焦点。将包含关键代码路径与判断依据的文本写入临时 UTF-8 文件（避免 Windows 引号与换行转义破坏），运行 `talk_antigravity.mjs` 发起协商。相同 `--cwd`（或显式 `--room`）会自动复用同一个 `agyConversationId` 保持多轮上下文，并实时触发 Antigravity 右侧「Codex 对讲室」自动切入直播。
+   - 轮次间透明播报（必做）：每轮返回后，若需发起下一轮（`--round 2/N` 等），**必须**先在当前 Codex 聊天流输出简短的 **「第 k/N 轮交锋纪要」**（Antigravity 的核心观点/反例 + 我方下一轮回应重点），严禁在后台连续静默调用多轮脚本而不展示中间讨论过程。
    - 收尾：作为当前主代理亲自完成必要的本地验证后，向用户给出精炼结论、双 AI 关键碰撞收获及待用户拍板的分歧（若有）。
 
 ## 2. 调用方式（Windows PowerShell 7 / Node）

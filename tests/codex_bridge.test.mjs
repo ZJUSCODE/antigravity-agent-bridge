@@ -436,4 +436,28 @@ describe('codex-bridge enterprise core & bridge suite', () => {
       delete process.env.AGY_CODEX_PEER_CALL;
     }
   });
+
+  it('wakes up idle viewer via global liveDiscussion radar when another room starts peer discussion', async () => {
+    core.writeMeta('room_viewer', { title: '旧静态页面', status: 'idle' });
+    const initial = await core.waitForRoomChange('room_viewer', '', () => 'v3.2', 600);
+
+    const t0 = Date.now();
+    const waitOther = core.waitForRoomChange('room_viewer', initial.etag, () => 'v3.2', 4000);
+    setTimeout(() => {
+      core.writeMeta('room_live_debate', { title: '# RFC 议题：跨会话实时自动跟随验证', cwd: fakeProjectA });
+      core.acquireRoomTurnLease('room_live_debate', 'codex-cli');
+    }, 25);
+
+    const woken = await waitOther;
+    const elapsed = Date.now() - t0;
+    assert.ok(!woken.unchanged, 'viewer room long-poll must wake up immediately when another room goes live');
+    assert.ok(elapsed < 450, `expected <450ms cross-room radar wakeup, took ${elapsed}ms`);
+    assert.equal(woken.liveDiscussion?.roomId, 'room_live_debate');
+    assert.equal(woken.liveDiscussion?.status, 'thinking');
+    assert.equal(woken.liveDiscussion?.title, 'RFC 议题：跨会话实时自动跟随验证');
+    assert.equal(
+      core.formatCodexDesktopThreadName(woken.liveDiscussion.title),
+      '[双AI] RFC 议题：跨会话实时自动跟随验证'
+    );
+  });
 });

@@ -50,6 +50,8 @@ const metaCache = new Map();      // safeConv -> { mtimeMs, size, data }
 const messagesCache = new Map();  // safeConv -> { mtimeMs, size, data }
 const roomWatchers = new Map();   // safeConv -> { watcher, refCount, idleTimer }
 const writeQueues = new Map();    // safeConv -> Promise
+let globalRadarWatcher = null;    // { watcher, refCount, idleTimer }
+let globalLiveCache = { mtimeMs: -1, size: -1, data: null };
 let activeInProcessCheck = () => false;
 
 function lruSet(map, key, val) {
@@ -72,12 +74,18 @@ export function closeAllRoomWatchers() {
     try { entry.watcher.close(); } catch {}
   }
   roomWatchers.clear();
+  if (globalRadarWatcher) {
+    clearTimeout(globalRadarWatcher.idleTimer);
+    try { globalRadarWatcher.watcher.close(); } catch {}
+    globalRadarWatcher = null;
+  }
 }
 
 export function resetCoreCaches() {
   closeAllRoomWatchers();
   metaCache.clear();
   messagesCache.clear();
+  globalLiveCache = { mtimeMs: -1, size: -1, data: null };
   stateDbCache = { key: '', ts: 0, value: { projects: [], threads: [] } };
 }
 
@@ -249,6 +257,132 @@ function retainDirWatcher(safeConv) {
       if (typeof cur.idleTimer.unref === 'function') cur.idleTimer.unref();
     }
   };
+}
+
+function retainGlobalRadarWatcher() {
+  const dataDir = getPluginDataDir();
+  if (!existsSync(dataDir)) return () => {};
+
+  if (!globalRadarWatcher) {
+    try {
+      const watcher = watch(dataDir, { persistent: false }, (_ev, filename) => {
+        const fname = String(filename || '');
+        if (!fname || fname.startsWith('last_active_room.json')) {
+          roomEvents.emit('any-change');
+        }
+      });
+      watcher.on('error', () => {
+        if (globalRadarWatcher) {
+          clearTimeout(globalRadarWatcher.idleTimer);
+          globalRadarWatcher = null;
+        }
+        try { watcher.close(); } catch {}
+      });
+      globalRadarWatcher = { watcher, refCount: 0, idleTimer: null };
+    } catch {
+      return () => {};
+    }
+  }
+
+  clearTimeout(globalRadarWatcher.idleTimer);
+  globalRadarWatcher.idleTimer = null;
+  globalRadarWatcher.refCount += 1;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (!globalRadarWatcher) return;
+    globalRadarWatcher.refCount = Math.max(0, globalRadarWatcher.refCount - 1);
+    if (globalRadarWatcher.refCount === 0) {
+      clearTimeout(globalRadarWatcher.idleTimer);
+      globalRadarWatcher.idleTimer = setTimeout(() => {
+        if (globalRadarWatcher && globalRadarWatcher.refCount === 0) {
+          try { globalRadarWatcher.watcher.close(); } catch {}
+          globalRadarWatcher = null;
+        }
+      }, WATCHER_IDLE_TTL_MS);
+      if (typeof globalRadarWatcher.idleTimer.unref === 'function') globalRadarWatcher.idleTimer.unref();
+    }
+  };
+}
+
+export function deriveCleanRoomTitle(rawText, maxLen = 38) {
+  let s = String(rawText || '').trim();
+  if (!s) return '';
+  const peerSpeechIdx = s.indexOf('### Antigravity 本轮发言');
+  if (peerSpeechIdx !== -1) s = s.slice(peerSpeechIdx + '### Antigravity 本轮发言'.length).trim();
+  const codexSpeechIdx = s.indexOf('### Codex 本轮发言');
+  if (codexSpeechIdx !== -1) s = s.slice(codexSpeechIdx + '### Codex 本轮发言'.length).trim();
+  s = s
+    .replace(/^\[PEER-EXCHANGE-FROM-[^\]]+\]\s*/i, '')
+    .replace(/^\*\*\[[^\]]+\]\*\*\s*/, '')
+    .replace(/^#+\s*/, '')
+    .replace(/`/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/（.*?讨论 \d+ 轮）$/, '')
+    .trim();
+  return s.slice(0, maxLen);
+}
+
+function recordGlobalLiveActivity(safeConv, metaObj) {
+  if (!safeConv || !metaObj) return;
+  try {
+    const filePath = join(getPluginDataDir(), 'last_active_room.json');
+    const normCwd = metaObj.cwd ? normalizeDirPath(metaObj.cwd) : null;
+    const isInternalScratch = normCwd && normCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\');
+    const cleanTitle = deriveCleanRoomTitle(metaObj.title || '', 42) || '双 AI 协商';
+    const payload = {
+      roomId: safeConv,
+      title: cleanTitle,
+      status: metaObj.status || 'idle',
+      liveStatus: metaObj.activeTurn?.liveStatus || '',
+      sender: metaObj.activeTurn?.sender || null,
+      leaseStartedAt: metaObj.turnLease?.startedAt || 0,
+      cwd: isInternalScratch ? null : normCwd,
+      projectName: (!isInternalScratch && normCwd) ? basename(normCwd) : null,
+      updatedAt: Number(metaObj.updatedAt) || Date.now(),
+    };
+    writeJsonAtomicSync(filePath, payload);
+    try {
+      const st = statSync(filePath);
+      globalLiveCache = { mtimeMs: st.mtimeMs, size: st.size, data: payload };
+    } catch {
+      globalLiveCache = { mtimeMs: -1, size: -1, data: payload };
+    }
+    roomEvents.emit('any-change', safeConv);
+  } catch {}
+}
+
+export function getGlobalLiveDiscussion() {
+  const filePath = join(getPluginDataDir(), 'last_active_room.json');
+  try {
+    if (existsSync(filePath)) {
+      const st = statSync(filePath);
+      let data;
+      if (globalLiveCache.mtimeMs === st.mtimeMs && globalLiveCache.size === st.size && globalLiveCache.data) {
+        data = globalLiveCache.data;
+      } else {
+        data = readJsonWithBackupSync(filePath);
+        if (data) globalLiveCache = { mtimeMs: st.mtimeMs, size: st.size, data };
+      }
+      if (data && data.roomId && existsSync(getRoomDir(data.roomId))) {
+        if (data.status === 'thinking' || data.status === 'awaiting_approval') {
+          const verifiedMeta = readMeta(data.roomId);
+          return {
+            ...data,
+            title: deriveCleanRoomTitle(verifiedMeta.title || data.title, 42) || '双 AI 协商',
+            status: verifiedMeta.status || 'idle',
+            liveStatus: verifiedMeta.activeTurn?.liveStatus || '',
+            leaseStartedAt: verifiedMeta.turnLease?.startedAt || 0,
+            updatedAt: Number(verifiedMeta.updatedAt) || data.updatedAt || 0,
+          };
+        }
+        return data;
+      }
+    }
+  } catch {}
+  return null;
 }
 
 function notifyRoomChanged(safeConv) {
@@ -622,6 +756,7 @@ export function acquireRoomTurnLease(convId, source = 'cli') {
     return next;
   });
 
+  recordGlobalLiveActivity(safeConv, meta);
   notifyRoomChanged(safeConv);
   return { leaseId, roomEpoch: meta.roomEpoch || 1, meta };
 }
@@ -685,7 +820,10 @@ export function releaseRoomTurnLease(convId, leaseId, finalPatch = {}) {
     }
     result = next;
   });
-  if (result) notifyRoomChanged(safeConv);
+  if (result) {
+    recordGlobalLiveActivity(safeConv, result);
+    notifyRoomChanged(safeConv);
+  }
   return result;
 }
 
@@ -894,12 +1032,7 @@ export function appendMessage(convId, msg, { expectedEpoch = null, expectedLease
     const prevUpdated = Number(curMeta.updatedAt) || 0;
     let nextTitle = curMeta.title || '新对话';
     if ((!nextTitle || nextTitle === '新对话' || nextTitle === 'Antigravity ↔ Codex 对讲室') && entry.text && entry.sender !== 'system') {
-      const cleanTitle = entry.text
-        .replace(/^\*\*\[[^\]]+\]\*\*\s*/, '')
-        .replace(/\s+/g, ' ')
-        .replace(/（.*?讨论 \d+ 轮）$/, '')
-        .trim()
-        .slice(0, 36);
+      const cleanTitle = deriveCleanRoomTitle(entry.text, 38);
       if (cleanTitle) nextTitle = cleanTitle;
     }
 
@@ -919,6 +1052,9 @@ export function appendMessage(convId, msg, { expectedEpoch = null, expectedLease
       lruSet(metaCache, safeConv, { mtimeMs: mst.mtimeMs, size: mst.size, data: nextMeta });
     } catch {
       metaCache.delete(safeConv);
+    }
+    if (entry.sender !== 'system') {
+      recordGlobalLiveActivity(safeConv, nextMeta);
     }
   });
 
@@ -959,17 +1095,22 @@ export async function waitForRoomChange(convId, clientEtag, getUiVersionFn, time
 
   const buildFullSnap = () => {
     const snap = getRoomSnapshot(safeConv);
+    const liveDiscussion = getGlobalLiveDiscussion();
+    const otherLiveSig = (liveDiscussion && liveDiscussion.roomId !== safeConv)
+      ? `${liveDiscussion.roomId}:${liveDiscussion.status}:${liveDiscussion.leaseStartedAt || 0}:${liveDiscussion.updatedAt || 0}`
+      : 'self';
     const uiVersion = getUiVersionFn ? getUiVersionFn() : '1';
-    const fullEtag = `${snap.etag}:${uiVersion}`;
-    return { snap, uiVersion, fullEtag };
+    const fullEtag = `${snap.etag}:${otherLiveSig}:${uiVersion}`;
+    return { snap, liveDiscussion, uiVersion, fullEtag };
   };
 
   const initial = buildFullSnap();
   if (!clientEtag || initial.fullEtag !== clientEtag) {
-    return { ...initial.snap, etag: initial.fullEtag, uiVersion: initial.uiVersion };
+    return { ...initial.snap, liveDiscussion: initial.liveDiscussion, etag: initial.fullEtag, uiVersion: initial.uiVersion };
   }
 
   const releaseWatcher = retainDirWatcher(safeConv);
+  const releaseGlobalWatcher = retainGlobalRadarWatcher();
   const clampedMs = Math.min(12000, Math.max(500, Number(timeoutMs) || 8000));
   try {
     await new Promise((resolveWait) => {
@@ -979,6 +1120,7 @@ export async function waitForRoomChange(convId, clientEtag, getUiVersionFn, time
         settled = true;
         clearTimeout(timer);
         roomEvents.off(`change:${safeConv}`, onEvent);
+        roomEvents.off('any-change', onEvent);
         resolveWait();
       };
       const onEvent = () => {
@@ -987,16 +1129,18 @@ export async function waitForRoomChange(convId, clientEtag, getUiVersionFn, time
       };
       const timer = setTimeout(finish, clampedMs);
       roomEvents.on(`change:${safeConv}`, onEvent);
+      roomEvents.on('any-change', onEvent);
     });
   } finally {
     releaseWatcher();
+    releaseGlobalWatcher();
   }
 
   const after = buildFullSnap();
   if (clientEtag && after.fullEtag === clientEtag) {
-    return { conversationId: safeConv, unchanged: true, etag: after.fullEtag, uiVersion: after.uiVersion };
+    return { conversationId: safeConv, unchanged: true, liveDiscussion: after.liveDiscussion, etag: after.fullEtag, uiVersion: after.uiVersion };
   }
-  return { ...after.snap, etag: after.fullEtag, uiVersion: after.uiVersion };
+  return { ...after.snap, liveDiscussion: after.liveDiscussion, etag: after.fullEtag, uiVersion: after.uiVersion };
 }
 
 export function createNewRoom({ cwd, model, effort, mode, approvalPolicy } = {}) {
@@ -1093,7 +1237,9 @@ export function listRecentRooms(limit = 80) {
         const msgs = readMessages(name);
         msgCount = msgs.length;
         const firstMsg = msgs.find((m) => m.sender !== 'system' && m.text);
-        title = firstMsg ? String(firstMsg.text).replace(/\s+/g, ' ').slice(0, 34) : '新对话';
+        title = firstMsg ? deriveCleanRoomTitle(firstMsg.text, 38) || '新对话' : '新对话';
+      } else if (title.startsWith('#') || title.startsWith('[PEER-EXCHANGE') || title.startsWith('**[')) {
+        title = deriveCleanRoomTitle(title, 42) || title;
       }
       const normCwd = meta.cwd ? normalizeDirPath(meta.cwd) : null;
       const isInternalScratch = normCwd && normCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\');
@@ -1126,8 +1272,8 @@ function cleanThreadTitle(name, rawTitle) {
   let t = String(rawTitle || '').trim();
   const reqIdx = t.indexOf('## My request:');
   if (reqIdx !== -1) t = t.slice(reqIdx + '## My request:'.length).trim();
-  t = t.replace(/^\[([^\]]+)\]\([^)]+\)\s*/, '$1 ');
-  t = t.replace(/\s+/g, ' ').trim();
+  t = deriveCleanRoomTitle(t, 44);
+  t = t.replace(/^\[([^\]]+)\]\([^)]+\)\s*/, '$1 ').replace(/\s+/g, ' ').trim();
   return t.slice(0, 44) || '未命名对话';
 }
 
@@ -1807,8 +1953,39 @@ function summarizeCommand(cmd) {
   return clean.length > 76 ? clean.slice(0, 73) + '...' : clean;
 }
 
+function isMissingCodexThreadErr(err) {
+  const m = String(err?.message || '').toLowerCase();
+  return m.includes('not found') || m.includes('no rollout') || m.includes('missing thread') || m.includes('does not exist');
+}
+
+export function isLegacyExecThread(sessionId) {
+  if (!sessionId) return false;
+  const dbPath = join(getCodexHome(), 'state_5.sqlite');
+  if (!existsSync(dbPath)) return false;
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true, timeout: 1000 });
+    const row = db.prepare('SELECT source FROM threads WHERE id = ?').get(sessionId);
+    return Boolean(row && row.source && row.source !== 'vscode');
+  } catch {
+    return false;
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
+export function formatCodexDesktopThreadName(roomTitle, fallbackText = '') {
+  const base = deriveCleanRoomTitle(
+    (roomTitle && roomTitle !== '新对话' && roomTitle !== 'Antigravity ↔ Codex 对讲室') ? roomTitle : fallbackText,
+    46
+  ) || '技术方案协商';
+  return base.startsWith('[双AI]') ? base : `[双AI] ${base}`;
+}
+
 // ---------------------------------------------------------------------------
-// Standalone CLI Runner (`talk_codex.mjs`: Antigravity -> Codex)
+// Standalone CLI Runner (`talk_codex.mjs`: Antigravity -> Codex via `app-server`)
+// Writes `source = 'vscode'` + clean `thread/name/set` so threads appear live
+// in OpenAI Codex Desktop AND stream token-by-token into `Codex 对讲室`!
 // ---------------------------------------------------------------------------
 export async function runCodexTurn({
   convId,
@@ -1851,11 +2028,15 @@ export async function runCodexTurn({
       const chosenSandbox = sandbox || prevMeta.sandbox || 'workspace-write';
       const chosenCwd = normalizeDirPath(cwd || prevMeta.cwd || ensureRoomDir(safeConv));
       mkdirSync(chosenCwd, { recursive: true });
+      ensureUploadsDir(safeConv);
 
       const cwdChanged = prevMeta.cwd && normalizeDirPath(prevMeta.cwd).toLowerCase() !== chosenCwd.toLowerCase();
-      const shouldFork = !newThread && !cwdChanged && Boolean(prevMeta.needsForkOnNextTurn && prevMeta.forkFromSessionId);
-      const threadToResume = (newThread || cwdChanged || shouldFork) ? null : (prevMeta.codexThreadId || null);
-      const forkSourceId = shouldFork ? prevMeta.forkFromSessionId : null;
+      const explicitFork = !newThread && !cwdChanged && Boolean(prevMeta.needsForkOnNextTurn && prevMeta.forkFromSessionId);
+      const rawCandidateResume = (newThread || cwdChanged || explicitFork) ? null : (prevMeta.codexThreadId || null);
+      const promoteExecViaFork = Boolean(rawCandidateResume && isLegacyExecThread(rawCandidateResume));
+      const shouldFork = explicitFork || promoteExecViaFork;
+      const forkSourceId = explicitFork ? prevMeta.forkFromSessionId : (promoteExecViaFork ? rawCandidateResume : null);
+      const threadToResume = shouldFork ? null : rawCandidateResume;
       const { exe, extraPathDirs } = findCodexBinary();
 
       const allImages = imagePaths.filter((p) => p && existsSync(p));
@@ -1888,6 +2069,7 @@ export async function runCodexTurn({
         sender,
         liveStatus: 'Thinking',
         reasoningSummary: '',
+        liveCommandOutput: '',
         streamingText: '',
         diff: '',
         plan: [],
@@ -1895,60 +2077,22 @@ export async function runCodexTurn({
         steps: [],
       };
 
-      // Keep fork source intact until child confirms new forked thread_id!
       const prefPatch = persistPrefs
         ? { model: chosenModel, effort: chosenEffort, sandbox: chosenSandbox, cwd: chosenCwd }
         : { cwd: prevMeta.cwd || chosenCwd };
 
-      writeMeta(safeConv, {
+      const updatedRoomMeta = writeMeta(safeConv, {
         ...prefPatch,
         status: 'thinking',
         activeTurn,
         lastError: null,
       }, { expectedEpoch: roomEpoch, requireExists: true });
 
-      const outFile = join(tmpdir(), `agy-codex-last-${process.pid}-${Date.now()}.txt`);
-      const imageFlags = [];
-      for (const img of allImages) imageFlags.push('-i', img);
-      const uploadsDir = ensureUploadsDir(safeConv);
-
-      // Headless `codex exec` has no interactive UI, so set approval_policy="never" while strictly enforcing sandbox_mode
-      const commonOverrides = [
-        ...(useUserConfig ? [] : ['--ignore-user-config']),
-        '-m', chosenModel,
-        '-c', `model_reasoning_effort="${chosenEffort}"`,
-        '-c', 'approval_policy="never"',
-        '--skip-git-repo-check',
+      const appServerArgs = [
+        'app-server',
+        '--stdio',
+        ...(useUserConfig ? [] : ['-c', 'mcp_servers={}', '--disable', 'hooks']),
       ];
-
-      let args;
-      if (shouldFork && forkSourceId) {
-        args = [
-          'exec', 'fork',
-          ...commonOverrides,
-          '-c', `sandbox_mode="${chosenSandbox}"`,
-          ...imageFlags,
-          '-o', outFile, '--json', forkSourceId, '-',
-        ];
-      } else if (threadToResume) {
-        args = [
-          'exec', 'resume',
-          ...commonOverrides,
-          '-c', `sandbox_mode="${chosenSandbox}"`,
-          ...imageFlags,
-          '-o', outFile, '--json', threadToResume, '-',
-        ];
-      } else {
-        args = [
-          'exec',
-          ...commonOverrides,
-          '-s', chosenSandbox,
-          '-C', chosenCwd,
-          '--add-dir', uploadsDir,
-          ...imageFlags,
-          '-o', outFile, '--json', '-',
-        ];
-      }
 
       const childEnv = { ...process.env, AGY_CODEX_PEER_CALL: '1' };
       delete childEnv.NODE_OPTIONS;
@@ -1959,14 +2103,24 @@ export async function runCodexTurn({
 
       return await new Promise((resolveTurn, rejectTurn) => {
         let resolvedThreadId = threadToResume;
-        let forkRecorded = false;
-        let lastAgentMessage = '';
+        let activeTurnId = null;
+        let codexNamedTitle = prevMeta.codexNamedTitle || '';
         let streamErrorMsg = '';
         let stderrBuf = '';
         let stdoutRemainder = '';
         let wasCancelled = false;
+        let settled = false;
+        let nextRpcId = 1;
+        let syncTimer = null;
+        let lastSyncMs = 0;
+        let tokenSummary = prevMeta.tokenUsage || null;
 
-        const child = spawn(exe, args, {
+        const pendingRpc = new Map();
+        const itemTexts = new Map();
+        const reasoningParts = new Map();
+        const cmdOutputs = new Map();
+
+        const child = spawn(exe, appServerArgs, {
           cwd: chosenCwd,
           env: childEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -1975,98 +2129,376 @@ export async function runCodexTurn({
 
         if (typeof onChild === 'function') onChild(child);
 
+        const sendRaw = (obj) => {
+          if (child.stdin && child.stdin.writable && !child.killed) {
+            child.stdin.write(JSON.stringify(obj) + '\n', 'utf-8');
+          }
+        };
+
+        const sendRpc = (method, params, timeoutMs = 45000) => {
+          const id = nextRpcId++;
+          sendRaw({ jsonrpc: '2.0', id, method, params });
+          return new Promise((res, rej) => {
+            const t = setTimeout(() => {
+              pendingRpc.delete(id);
+              rej(new Error(`Codex app-server RPC 超时 (${method})`));
+            }, timeoutMs);
+            if (typeof t.unref === 'function') t.unref();
+            pendingRpc.set(id, { resolve: res, reject: rej, timer: t });
+          });
+        };
+
+        const teardownChild = () => {
+          clearTimeout(syncTimer);
+          syncTimer = null;
+          roomEvents.off(`change:${safeConv}`, checkExternalCancel);
+          for (const [, p] of pendingRpc) {
+            clearTimeout(p.timer);
+            p.reject(new Error('Codex 会话已结束'));
+          }
+          pendingRpc.clear();
+          try { child.stdin?.end(); } catch {}
+          try { if (!child.killed) child.kill(); } catch {}
+        };
+
+        const flushSyncActive = () => {
+          if (settled || wasCancelled) return;
+          clearTimeout(syncTimer);
+          syncTimer = null;
+          lastSyncMs = Date.now();
+          writeMeta(safeConv, {
+            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+            ...(codexNamedTitle ? { codexNamedTitle } : {}),
+            ...(tokenSummary ? { tokenUsage: tokenSummary } : {}),
+            status: 'thinking',
+            activeTurn: { ...activeTurn, steps: [...activeTurn.steps], plan: [...activeTurn.plan] },
+          }, { expectedEpoch: roomEpoch, expectedLeaseId: leaseId, requireExists: true });
+        };
+
+        const scheduleSyncActive = () => {
+          if (settled || wasCancelled) return;
+          if (Date.now() - lastSyncMs >= 85) {
+            flushSyncActive();
+          } else if (!syncTimer) {
+            syncTimer = setTimeout(flushSyncActive, 85);
+            if (typeof syncTimer.unref === 'function') syncTimer.unref();
+          }
+        };
+
+        const settleCancelled = () => {
+          if (settled) return;
+          settled = true;
+          teardownChild();
+          const partial = [...itemTexts.values()].join('\n\n').trim();
+          const durationMs = Date.now() - startedAt;
+          const replyEntry = appendMessage(safeConv, {
+            sender: 'codex',
+            senderLabel: 'Codex',
+            text: partial ? `${partial}\n\n*(已手动中止)*` : '*(回合已手动中止)*',
+            diff: activeTurn.diff || '',
+            reasoningSummary: activeTurn.reasoningSummary,
+            plan: activeTurn.plan,
+            codexThreadId: resolvedThreadId,
+            model: chosenModel,
+            effort: chosenEffort,
+            durationMs,
+            steps: activeTurn.steps,
+          }, { expectedEpoch: roomEpoch, requireExists: true });
+          const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
+            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId } : {}),
+            ...(codexNamedTitle ? { codexNamedTitle } : {}),
+            status: 'idle',
+            activeTurn: null,
+            lastError: null,
+          });
+          resolveTurn({
+            conversationId: safeConv,
+            codexThreadId: resolvedThreadId,
+            reply: replyEntry?.text || '*(回合已手动中止)*',
+            cancelled: true,
+            durationMs,
+            steps: activeTurn.steps,
+            meta: finalMeta,
+          });
+        };
+
+        const settleFailed = (errMsg) => {
+          if (settled) return;
+          settled = true;
+          teardownChild();
+          const cleanErr = String(errMsg || stderrBuf || 'Codex 回合执行异常').trim().slice(-600);
+          const partial = [...itemTexts.values()].join('\n\n').trim();
+          const durationMs = Date.now() - startedAt;
+          if (partial || activeTurn.diff) {
+            appendMessage(safeConv, {
+              sender: 'codex',
+              senderLabel: 'Codex',
+              text: `${partial || '*(部分改动见下方 Diff)*'}\n\n*(执行异常中断: ${cleanErr})*`,
+              diff: activeTurn.diff || '',
+              reasoningSummary: activeTurn.reasoningSummary,
+              plan: activeTurn.plan,
+              codexThreadId: resolvedThreadId,
+              model: chosenModel,
+              effort: chosenEffort,
+              durationMs,
+              steps: activeTurn.steps,
+            }, { expectedEpoch: roomEpoch, requireExists: true });
+          }
+          releaseRoomTurnLease(safeConv, leaseId, {
+            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+            ...(codexNamedTitle ? { codexNamedTitle } : {}),
+            status: 'error',
+            activeTurn: null,
+            lastError: cleanErr,
+          });
+          rejectTurn(new Error(cleanErr));
+        };
+
+        const settleSuccess = () => {
+          if (settled) return;
+          settled = true;
+          teardownChild();
+          const finalReply = [...itemTexts.values()].join('\n\n').trim();
+          const durationMs = Date.now() - startedAt;
+          if (!finalReply && !activeTurn.diff && streamErrorMsg) {
+            releaseRoomTurnLease(safeConv, leaseId, {
+              ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+              status: 'error',
+              activeTurn: null,
+              lastError: streamErrorMsg,
+            });
+            rejectTurn(new Error(streamErrorMsg));
+            return;
+          }
+          const replyEntry = appendMessage(safeConv, {
+            sender: 'codex',
+            senderLabel: 'Codex',
+            text: finalReply || (activeTurn.diff ? '已完成文件修改（见下方 Diff）' : '（无输出内容）'),
+            diff: activeTurn.diff || '',
+            reasoningSummary: activeTurn.reasoningSummary,
+            plan: activeTurn.plan,
+            codexThreadId: resolvedThreadId,
+            model: chosenModel,
+            effort: chosenEffort,
+            durationMs,
+            tokenCount: tokenSummary?.lastTokens ?? null,
+            steps: activeTurn.steps,
+          }, { expectedEpoch: roomEpoch, requireExists: true });
+
+          const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
+            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+            ...(codexNamedTitle ? { codexNamedTitle } : {}),
+            ...(tokenSummary ? { tokenUsage: tokenSummary } : {}),
+            status: 'idle',
+            activeTurn: null,
+            lastError: null,
+          });
+
+          resolveTurn({
+            conversationId: safeConv,
+            codexThreadId: resolvedThreadId,
+            reply: replyEntry?.text || finalReply,
+            reasoningSummary: activeTurn.reasoningSummary,
+            diff: activeTurn.diff,
+            durationMs,
+            tokenUsage: tokenSummary,
+            steps: activeTurn.steps,
+            meta: finalMeta,
+          });
+        };
+
         const checkExternalCancel = () => {
           try {
             if (!existsSync(getRoomDir(safeConv))) {
               wasCancelled = true;
-              try { child.kill(); } catch {}
+              settleCancelled();
               return;
             }
             const cur = readMeta(safeConv);
             if (((cur.cancelRequestedAt && cur.cancelRequestedAt >= startedAt) || (cur.roomEpoch || 1) !== roomEpoch) && !wasCancelled) {
               wasCancelled = true;
-              try { child.kill(); } catch {}
+              if (resolvedThreadId && activeTurnId) {
+                sendRpc('turn/interrupt', { threadId: resolvedThreadId, turnId: activeTurnId }, 3000).catch(() => {});
+              }
+              const killTimer = setTimeout(() => settleCancelled(), 1200);
+              if (typeof killTimer.unref === 'function') killTimer.unref();
             }
           } catch {}
         };
         roomEvents.on(`change:${safeConv}`, checkExternalCancel);
 
-        child.stdin.write(effectivePrompt, 'utf-8');
-        child.stdin.end();
-
-        const syncActive = () => {
-          if (wasCancelled) return;
-          writeMeta(safeConv, {
-            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
-            status: 'thinking',
-            activeTurn: { ...activeTurn },
-          }, { expectedEpoch: roomEpoch, requireExists: true });
-        };
-
-        const handleJsonEvent = (ev) => {
-          if (!ev || typeof ev !== 'object') return;
-          if (ev.type === 'thread.started' && ev.thread_id) {
-            resolvedThreadId = ev.thread_id;
-            if (shouldFork && forkSourceId && !forkRecorded) {
-              forkRecorded = true;
-              appendMessage(safeConv, {
-                sender: 'system',
-                senderLabel: '系统',
-                text: `已从历史会话 (${forkSourceId.slice(0, 8)}…) 成功创建安全分支`,
-              }, { expectedEpoch: roomEpoch, requireExists: true });
+        const handleRpcMessage = (msg) => {
+          if (!msg || typeof msg !== 'object') return;
+          if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined) && !msg.method) {
+            const p = pendingRpc.get(msg.id);
+            if (p) {
+              clearTimeout(p.timer);
+              pendingRpc.delete(msg.id);
+              if (msg.error) p.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+              else p.resolve(msg.result);
             }
-            syncActive();
             return;
           }
-          if ((ev.type === 'error' || ev.type === 'turn.failed') && (ev.message || ev.error?.message)) {
-            streamErrorMsg = String(ev.message || ev.error?.message);
+
+          // Headless peer exchange enforces sandbox without interactive prompts
+          if (msg.id !== undefined && msg.method) {
+            sendRaw({ jsonrpc: '2.0', id: msg.id, result: { decision: 'decline' } });
             return;
           }
-          const item = ev.item;
-          if (item && typeof item === 'object') {
-            if (item.type === 'reasoning') {
-              if (typeof item.text === 'string' && item.text.trim()) {
-                activeTurn.reasoningSummary = item.text.trim();
-              } else if (Array.isArray(item.summary) && item.summary.length) {
-                activeTurn.reasoningSummary = item.summary.join('\n').trim();
-              }
+
+          const method = msg.method;
+          const params = msg.params || {};
+          if (!method) return;
+
+          if (method === 'turn/started' && params.turn?.id) {
+            if (!activeTurnId) activeTurnId = params.turn.id;
+            return;
+          }
+
+          const notifTurnId = params.turnId || params.turn?.id;
+          if (activeTurnId && notifTurnId && notifTurnId !== activeTurnId) return;
+
+          if (method === 'item/reasoning/summaryTextDelta' && typeof params.delta === 'string') {
+            const key = `${params.itemId || 'r'}:${params.summaryIndex ?? 0}`;
+            reasoningParts.set(key, (reasoningParts.get(key) || '') + params.delta);
+            activeTurn.reasoningSummary = [...reasoningParts.values()].join('\n').trim();
+            if (!activeTurn.streamingText) activeTurn.liveStatus = 'Thinking';
+            scheduleSyncActive();
+            return;
+          }
+
+          if (method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
+            const key = params.itemId || 'default';
+            itemTexts.set(key, (itemTexts.get(key) || '') + params.delta);
+            activeTurn.streamingText = [...itemTexts.values()].join('\n\n');
+            activeTurn.liveStatus = 'Responding';
+            scheduleSyncActive();
+            return;
+          }
+
+          if (method === 'item/commandExecution/outputDelta' && typeof params.delta === 'string') {
+            const key = params.itemId || 'cmd';
+            const nextOut = ((cmdOutputs.get(key) || '') + params.delta).slice(-1400);
+            cmdOutputs.set(key, nextOut);
+            activeTurn.liveCommandOutput = nextOut;
+            scheduleSyncActive();
+            return;
+          }
+
+          if (method === 'turn/diff/updated' && typeof params.diff === 'string') {
+            activeTurn.diff = params.diff;
+            scheduleSyncActive();
+            return;
+          }
+
+          if (method === 'turn/plan/updated' && Array.isArray(params.plan)) {
+            activeTurn.plan = params.plan.map((p) => ({
+              step: String(p.step || ''),
+              status: String(p.status || 'pending'),
+            })).filter((p) => p.step);
+            scheduleSyncActive();
+            return;
+          }
+
+          if (method === 'thread/tokenUsage/updated' && params.tokenUsage) {
+            const tu = params.tokenUsage;
+            tokenSummary = {
+              totalTokens: tu.total?.totalTokens ?? 0,
+              lastTokens: tu.last?.totalTokens ?? 0,
+              outputTokens: tu.last?.outputTokens ?? 0,
+              reasoningTokens: tu.last?.reasoningOutputTokens ?? 0,
+              contextWindow: tu.modelContextWindow ?? null,
+            };
+            scheduleSyncActive();
+            return;
+          }
+
+          if (method === 'item/started' && params.item) {
+            const it = params.item;
+            if (it.type === 'commandExecution') {
+              cmdOutputs.set(it.id || 'cmd', '');
+              activeTurn.liveCommandOutput = '';
+              activeTurn.liveStatus = `Running ${summarizeCommand(it.command || '')}`;
+              scheduleSyncActive();
+            } else if (it.type === 'fileChange') {
+              activeTurn.liveStatus = 'Applying file changes…';
+              scheduleSyncActive();
+            } else if (it.type === 'mcpToolCall') {
+              activeTurn.liveStatus = `Calling ${it.server || 'MCP'}/${it.tool || 'tool'}…`;
+              scheduleSyncActive();
+            } else if (it.type === 'webSearch') {
+              activeTurn.liveStatus = 'Searching web…';
+              scheduleSyncActive();
+            }
+            return;
+          }
+
+          if (method === 'item/completed' && params.item) {
+            const it = params.item;
+            if (it.type === 'agentMessage' && typeof it.text === 'string' && it.text.trim()) {
+              itemTexts.set(it.id || 'default', it.text);
+              activeTurn.streamingText = [...itemTexts.values()].join('\n\n');
+              scheduleSyncActive();
+            } else if (it.type === 'reasoning' && Array.isArray(it.summary) && it.summary.length > 0 && !activeTurn.reasoningSummary) {
+              activeTurn.reasoningSummary = it.summary.join('\n').trim();
+              scheduleSyncActive();
+            } else if (it.type === 'commandExecution') {
+              const fullCmd = String(it.command || '');
+              const outTail = String(it.aggregatedOutput || cmdOutputs.get(it.id) || '').trim().slice(-1400);
+              activeTurn.liveCommandOutput = '';
+              activeTurn.steps.push({
+                kind: 'command',
+                label: summarizeCommand(fullCmd),
+                command: fullCmd.slice(0, 350),
+                cwd: stripWinPrefix(it.cwd || ''),
+                output: outTail,
+                exitCode: it.exitCode ?? 0,
+                durationMs: it.durationMs ?? null,
+              });
               activeTurn.liveStatus = 'Thinking';
-              syncActive();
-            } else if (item.type === 'command_execution') {
-              const fullCmd = String(item.command || item.cmd || '');
-              const cmdLabel = summarizeCommand(fullCmd);
-              if (ev.type === 'item.started') {
-                activeTurn.liveStatus = `Running ${cmdLabel}`;
-              } else if (ev.type === 'item.completed') {
-                const outTail = String(item.aggregated_output || item.output || '').trim().slice(-1200);
-                activeTurn.steps.push({
-                  kind: 'command',
-                  label: cmdLabel,
-                  command: fullCmd.slice(0, 300),
-                  output: outTail,
-                  exitCode: item.exit_code ?? 0,
-                });
-                activeTurn.liveStatus = 'Thinking';
-              }
-              syncActive();
-            } else if (item.type === 'file_change' && ev.type === 'item.completed') {
-              const files = Array.isArray(item.changes) ? item.changes.map((c) => basename(c.path || '')).filter(Boolean) : [];
+              scheduleSyncActive();
+            } else if (it.type === 'fileChange') {
+              const files = Array.isArray(it.changes)
+                ? it.changes.map((c) => basename(stripWinPrefix(c.path || ''))).filter(Boolean)
+                : [];
               activeTurn.steps.push({
                 kind: 'fileChange',
                 label: files.length ? `修改文件: ${files.join(', ')}` : '应用文件修改',
               });
-              syncActive();
-            } else if (item.type === 'mcp_tool_call' && ev.type === 'item.completed') {
+              activeTurn.liveStatus = 'Thinking';
+              scheduleSyncActive();
+            } else if (it.type === 'mcpToolCall') {
               activeTurn.steps.push({
                 kind: 'mcp',
-                label: `${item.server || 'mcp'}/${item.tool || 'tool'}`,
+                label: `${it.server || 'mcp'}/${it.tool || 'tool'}`,
               });
-              syncActive();
-            } else if (item.type === 'agent_message' && typeof item.text === 'string' && item.text.trim()) {
-              lastAgentMessage = item.text;
-              activeTurn.streamingText = item.text;
-              activeTurn.liveStatus = 'Responding';
-              syncActive();
+              activeTurn.liveStatus = 'Thinking';
+              scheduleSyncActive();
+            } else if (it.type === 'webSearch') {
+              activeTurn.steps.push({
+                kind: 'search',
+                label: it.query ? `搜索: ${String(it.query).slice(0, 60)}` : '网页检索',
+              });
+              activeTurn.liveStatus = 'Thinking';
+              scheduleSyncActive();
+            }
+            return;
+          }
+
+          if (method === 'error' && params.message) {
+            streamErrorMsg = String(params.message);
+            return;
+          }
+
+          if (method === 'turn/completed') {
+            const turnStatus = params.turn?.status;
+            const turnErr = params.turn?.error?.message || streamErrorMsg;
+            if (wasCancelled || turnStatus === 'interrupted') {
+              settleCancelled();
+            } else if (turnStatus === 'failed') {
+              settleFailed(turnErr || 'Codex 回合执行失败');
+            } else {
+              settleSuccess();
             }
           }
         };
@@ -2079,7 +2511,7 @@ export async function runCodexTurn({
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed.startsWith('{')) continue;
-            try { handleJsonEvent(JSON.parse(trimmed)); } catch {}
+            try { handleRpcMessage(JSON.parse(trimmed)); } catch {}
           }
         });
 
@@ -2087,109 +2519,139 @@ export async function runCodexTurn({
         child.stderr.on('data', (chunk) => { stderrBuf += chunk; });
 
         child.on('error', (err) => {
-          roomEvents.off(`change:${safeConv}`, checkExternalCancel);
-          try { rmSync(outFile, { force: true }); } catch {}
-          releaseRoomTurnLease(safeConv, leaseId, { status: 'error', activeTurn: null, lastError: err.message });
-          rejectTurn(err);
+          settleFailed(err.message);
         });
 
         child.on('close', (code) => {
-          roomEvents.off(`change:${safeConv}`, checkExternalCancel);
+          if (settled) return;
           if (stdoutRemainder.trim().startsWith('{')) {
-            try { handleJsonEvent(JSON.parse(stdoutRemainder.trim())); } catch {}
+            try { handleRpcMessage(JSON.parse(stdoutRemainder.trim())); } catch {}
           }
-          let finalReply = '';
-          if (existsSync(outFile)) {
-            try { finalReply = readFileSync(outFile, 'utf-8').trim(); } catch {}
-            try { rmSync(outFile, { force: true }); } catch {}
-          }
-          if (!finalReply) finalReply = lastAgentMessage.trim();
-
-          const durationMs = Date.now() - startedAt;
-
+          if (settled) return;
           if (wasCancelled) {
-            const replyEntry = appendMessage(safeConv, {
-              sender: 'codex',
-              senderLabel: 'Codex',
-              text: finalReply ? `${finalReply}\n\n*(已手动中止)*` : '*(回合已手动中止)*',
-              reasoningSummary: activeTurn.reasoningSummary,
-              codexThreadId: resolvedThreadId,
+            settleCancelled();
+          } else {
+            settleFailed(streamErrorMsg || stderrBuf || `Codex app-server exited early (code ${code})`);
+          }
+        });
+
+        // Drive JSON-RPC handshake -> thread setup -> title sync -> turn/start
+        (async () => {
+          try {
+            await sendRpc('initialize', {
+              clientInfo: { name: 'antigravity-codex-peer', title: 'Antigravity Peer Bridge', version: '3.2.0' },
+              capabilities: null,
+            }, 20000);
+            sendRaw({ jsonrpc: '2.0', method: 'initialized', params: {} });
+
+            if (wasCancelled) {
+              settleCancelled();
+              return;
+            }
+
+            let createdOrForked = false;
+            if (shouldFork && forkSourceId) {
+              try {
+                const forkRes = await sendRpc('thread/fork', {
+                  threadId: forkSourceId,
+                  excludeTurns: true,
+                  model: chosenModel,
+                  cwd: chosenCwd,
+                  approvalPolicy: 'never',
+                  sandbox: chosenSandbox,
+                });
+                resolvedThreadId = forkRes.thread.id;
+                createdOrForked = true;
+                if (explicitFork) {
+                  appendMessage(safeConv, {
+                    sender: 'system',
+                    senderLabel: '系统',
+                    text: `已从历史会话 (${forkSourceId.slice(0, 8)}…) 成功创建安全分支`,
+                  }, { expectedEpoch: roomEpoch, requireExists: true });
+                }
+              } catch (forkErr) {
+                if (isMissingCodexThreadErr(forkErr)) {
+                  resolvedThreadId = null;
+                } else {
+                  throw forkErr;
+                }
+              }
+            } else if (resolvedThreadId) {
+              try {
+                const res = await sendRpc('thread/resume', {
+                  threadId: resolvedThreadId,
+                  excludeTurns: true,
+                  model: chosenModel,
+                  cwd: chosenCwd,
+                  approvalPolicy: 'never',
+                  sandbox: chosenSandbox,
+                });
+                resolvedThreadId = res.thread.id;
+              } catch (resumeErr) {
+                if (isMissingCodexThreadErr(resumeErr)) {
+                  resolvedThreadId = null;
+                } else {
+                  throw resumeErr;
+                }
+              }
+            }
+
+            if (!resolvedThreadId) {
+              const startRes = await sendRpc('thread/start', {
+                model: chosenModel,
+                cwd: chosenCwd,
+                approvalPolicy: 'never',
+                sandbox: chosenSandbox,
+              });
+              resolvedThreadId = startRes.thread.id;
+              createdOrForked = true;
+            }
+
+            const desiredName = formatCodexDesktopThreadName(updatedRoomMeta?.title || readMeta(safeConv).title, bubbleText);
+            if (createdOrForked || desiredName !== codexNamedTitle) {
+              await sendRpc('thread/name/set', {
+                threadId: resolvedThreadId,
+                name: desiredName,
+              }, 8000).then(() => {
+                codexNamedTitle = desiredName;
+              }).catch(() => {});
+            }
+
+            flushSyncActive();
+
+            if (wasCancelled) {
+              settleCancelled();
+              return;
+            }
+
+            const inputs = [];
+            for (const img of allImages) {
+              inputs.push({ type: 'localImage', path: img });
+            }
+            inputs.push({ type: 'text', text: effectivePrompt, text_elements: [] });
+
+            const turnRes = await sendRpc('turn/start', {
+              threadId: resolvedThreadId,
               model: chosenModel,
               effort: chosenEffort,
-              durationMs,
-              steps: activeTurn.steps,
-            }, { expectedEpoch: roomEpoch, requireExists: true });
-            const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
-              ...(resolvedThreadId ? { codexThreadId: resolvedThreadId } : {}),
-              status: 'idle',
-              activeTurn: null,
-              lastError: null,
+              cwd: chosenCwd,
+              approvalPolicy: 'never',
+              summary: 'auto',
+              input: inputs,
             });
-            resolveTurn({
-              conversationId: safeConv,
-              codexThreadId: resolvedThreadId,
-              reply: replyEntry?.text || '*(回合已手动中止)*',
-              cancelled: true,
-              durationMs,
-              steps: activeTurn.steps,
-              meta: finalMeta,
-            });
-            return;
-          }
-
-          if (code !== 0 || streamErrorMsg) {
-            const errMsg = (streamErrorMsg || stderrBuf || `Codex exited with code ${code}`).trim().slice(-600);
-            if (finalReply) {
-              appendMessage(safeConv, {
-                sender: 'codex',
-                senderLabel: 'Codex',
-                text: `${finalReply}\n\n*(执行异常中断: ${errMsg})*`,
-                reasoningSummary: activeTurn.reasoningSummary,
-                codexThreadId: resolvedThreadId,
-                model: chosenModel,
-                effort: chosenEffort,
-                durationMs,
-                steps: activeTurn.steps,
-              }, { expectedEpoch: roomEpoch, requireExists: true });
+            if (turnRes?.turn?.id && !activeTurnId) {
+              activeTurnId = turnRes.turn.id;
             }
-            releaseRoomTurnLease(safeConv, leaseId, {
-              ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
-              status: 'error',
-              activeTurn: null,
-              lastError: errMsg,
-            });
-            rejectTurn(new Error(errMsg));
-            return;
+            if (wasCancelled && activeTurnId) {
+              await sendRpc('turn/interrupt', { threadId: resolvedThreadId, turnId: activeTurnId }, 3000).catch(() => {});
+            }
+          } catch (rpcErr) {
+            if (!settled) {
+              if (wasCancelled) settleCancelled();
+              else settleFailed(rpcErr.message);
+            }
           }
-
-          const replyEntry = appendMessage(safeConv, {
-            sender: 'codex',
-            senderLabel: 'Codex',
-            text: finalReply || '（无输出内容）',
-            reasoningSummary: activeTurn.reasoningSummary,
-            codexThreadId: resolvedThreadId,
-            model: chosenModel,
-            effort: chosenEffort,
-            durationMs,
-            steps: activeTurn.steps,
-          }, { expectedEpoch: roomEpoch, requireExists: true });
-
-          const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
-            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
-            status: 'idle',
-            activeTurn: null,
-            lastError: null,
-          });
-
-          resolveTurn({
-            conversationId: safeConv,
-            codexThreadId: resolvedThreadId,
-            reply: replyEntry?.text || finalReply,
-            durationMs,
-            steps: activeTurn.steps,
-            meta: finalMeta,
-          });
-        });
+        })();
       });
     } catch (err) {
       releaseRoomTurnLease(safeConv, leaseId, { status: 'error', activeTurn: null, lastError: err.message });
