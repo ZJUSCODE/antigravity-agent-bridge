@@ -653,7 +653,7 @@
     const res = await apiPost('/api/projects/switch', {
       conversationId: hostConvId(),
       path: targetPath,
-      model: state.meta?.model || 'gpt-6.2-astra',
+      model: state.meta?.model || state.models[0]?.slug || 'auto',
       effort: state.meta?.effort || 'medium',
       mode: state.meta?.mode || 'dual-2',
       approvalPolicy: state.meta?.approvalPolicy || 'on-request',
@@ -1714,7 +1714,7 @@
     const snapCtx = {
       hostId: hostConvId(),
       roomId: pinnedRoomId,
-      model: state.meta.model || 'gpt-6.2-astra',
+      model: state.meta.model || state.models[0]?.slug || 'auto',
       effort: state.meta.effort || 'medium',
       approvalPolicy: state.meta.approvalPolicy || 'on-request',
       cwd: state.meta.cwd || null,

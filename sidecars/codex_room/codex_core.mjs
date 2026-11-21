@@ -1557,7 +1557,7 @@ export function listRecentRooms(limit = 80) {
         forkFromSessionId: meta.forkFromSessionId || null,
         cwd: isInternalScratch ? null : normCwd,
         projectName: (!isInternalScratch && normCwd) ? basename(normCwd) : null,
-        model: meta.model || 'gpt-6.2-astra',
+        model: meta.model || resolveDefaultCodexModel(),
         status: meta.status || 'idle',
         messageCount: msgCount,
         updatedAt: meta.updatedAt || 0,
@@ -1811,7 +1811,7 @@ export function importNativeCodexSession(sessionId, titleHint = '') {
     : findRolloutFileBySessionId(cleanId);
 
   let sessionCwd = dbRow?.cwd || null;
-  let sessionModel = dbRow?.model || 'gpt-6.2-astra';
+  let sessionModel = dbRow?.model || resolveDefaultCodexModel();
   const imported = [];
 
   if (rolloutPath && existsSync(rolloutPath)) {
@@ -2213,7 +2213,7 @@ export function exportRoomMarkdown(convId, { saveToDisk = true } = {}) {
     `# ${meta.title || 'Codex 对话记录'}`,
     '',
     `- **项目目录**: ${meta.cwd || '通用（未指定）'}`,
-    `- **模型与强度**: \`${meta.model || 'gpt-6.2-astra'}\` (${meta.effort || 'medium'})`,
+    `- **模型与强度**: \`${meta.model || resolveDefaultCodexModel()}\` (${meta.effort || 'medium'})`,
     `- **Codex 线程 ID**: \`${meta.codexThreadId || '无'}\``,
     `- **导出时间**: ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
     '',
