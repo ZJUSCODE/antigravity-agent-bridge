@@ -11,6 +11,7 @@
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-007acc)](#)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![LINUX DO](https://img.shields.io/badge/Community-LINUX%20DO-f0a500?logo=discourse&logoColor=white)](https://linux.do/)
 
 **Turn Google Antigravity into a Multi-Agent Command Center & Peer-Review Roundtable.**
 Connect **OpenAI Codex**, **Pi Coding Agent**, **Anthropic Claude Code**, **Google Gemini CLI**, **OpenCode**, and **any custom CLI coding agent** inside Antigravity's native right-hand Auxiliary Pane — with **0 external npm dependencies**.
@@ -93,7 +94,7 @@ Copy [`agents.example.json`](./agents.example.json) to `agents.custom.json` insi
 # Inspect all detected coding agents, models, and health checks:
 npm run doctor
 
-# Run the 16 automated concurrency, path-sandbox, NDJSON streaming & HTTP long-polling tests:
+# Run the 17 automated concurrency, path-sandbox, NDJSON streaming & HTTP long-polling tests:
 npm test
 
 # Cleanly remove reverse peer skills from ~/.codex, ~/.pi, and ~/.claude:
@@ -102,7 +103,8 @@ npm run uninstall-bridge
 
 ---
 
-## Contributing & License
+## Community, Contributing & License
 
-Contributions, new agent adapters, and issue reports are warmly welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md).
-Released under the [MIT License](./LICENSE).
+- **Community Acknowledgment**: Proudly shared with and supported by the **[LINUX DO](https://linux.do/)** developer community.
+- **Contributing**: Contributions, new agent adapters, and issue reports are warmly welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md).
+- **License**: Released under the [MIT License](./LICENSE).

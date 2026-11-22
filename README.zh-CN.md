@@ -11,6 +11,7 @@
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-007acc)](#)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![LINUX DO](https://img.shields.io/badge/Community-LINUX%20DO-f0a500?logo=discourse&logoColor=white)](https://linux.do/)
 
 **把 Google Antigravity 升级为「多智能体协同指挥中心与同屏圆桌对讲室」。**
 零第三方 `npm` 依赖，在 Antigravity 右侧原生辅助栏一键连接 **OpenAI Codex**、**Pi Agent**、**Anthropic Claude Code**、**Google Gemini CLI**、**OpenCode** 及任意自定义 CLI 智能体！
@@ -86,10 +87,11 @@ npm run doctor
 
 ```bash
 npm run doctor            # 一键巡检本机已安装的各家 Agent CLI 路径与连接状态
-npm test                  # 运行 16 项并发锁、路径防穿越、多协议流式解析与 HTTP 长轮询测试
+npm test                  # 运行 17 项并发锁、路径防穿越、多协议流式解析与目录同步测试
 npm run uninstall-bridge  # 干净移除安装到 ~/.codex、~/.pi、~/.claude 下的同侪技能（保留一切历史对话）
 ```
 
-## 开源协议
+## 社区致谢与开源协议
 
-本项目基于 [MIT License](./LICENSE) 开源，欢迎 Star、Fork 与提交新智能体适配器 PR！
+- **社区认可与致谢**：感谢 **[LINUX DO（linux.do）](https://linux.do/)** 技术社区真诚、友善、团结、专业的开源交流氛围。
+- **开源协议**：本项目基于 [MIT License](./LICENSE) 完全开源，欢迎 Star、Fork 与提交新智能体适配器 PR！
