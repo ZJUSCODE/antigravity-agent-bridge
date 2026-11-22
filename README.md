@@ -22,9 +22,9 @@ Connect **OpenAI Codex**, **Pi Coding Agent**, **Anthropic Claude Code**, **Goog
 
 ## Why `antigravity-agent-bridge`?
 
-Modern AI-assisted engineering rarely relies on a single model. Architects often want **Antigravity** to plan a spec, **OpenAI Codex** or **Pi** to implement backend/frontend changes, and **Claude Code** or **Gemini CLI** to perform independent adversarial code review — without copy-pasting prompts across 4 terminal windows.
+Talking directly to GPT / Codex with rough, conversational prompts often feels clunky — whereas brainstorming naturally with **Gemini inside Google Antigravity**, letting Gemini synthesize a rigorous, context-complete engineering prompt, and then handing that spec to **OpenAI Codex** (or **Claude Code** / **Pi**) to execute produces dramatically better results. Previously, doing this meant manually copy-pasting prompts and `git diff`s across multiple windows.
 
-**`antigravity-agent-bridge`** solves this natively inside **Google Antigravity**:
+**`antigravity-agent-bridge`** automates this exact workflow natively inside **Google Antigravity**:
 
 - **Native Aux-Pane Roundtable UI**: Embeds directly into Antigravity's right-hand Sidecar pane, binding live to Antigravity's `:root` theme CSS variables (`Light`, `Dark`, and custom themes update in the exact same frame with zero visual seam) and following your active Antigravity conversation **1:1**.
 - **5 Built-In Streaming Agent Drivers + Extensible Custom Adapters**:

@@ -20,11 +20,11 @@
 
 ---
 
-## 一、为什么需要 `antigravity-agent-bridge`？
+## 一、项目初衷：为什么需要 `antigravity-agent-bridge`？
 
-在真实研发中，不同智能体各有所长：你可能希望由 **Antigravity** 统筹需求与架构决策，指派 **OpenAI Codex** 攻坚后端核心算法、**Pi** 或 **Claude Code** 编写前端与单测，或者让它们对同一份 `git diff` **并行开展对抗式交叉 Code Review**——而不是自己在四五个终端窗口之间来回复制粘贴。
+很多开发者在实战中都有同感：**直接用大白话跟 GPT / Codex 沟通需求往往不够顺手；但如果先在 Google Antigravity 里和 Gemini 自然讨论、把架构与边界聊透，再由 Gemini 提炼出结构严谨的专业工程 Prompt 交给 Codex（或 Claude Code / Pi）去落地执行，效果会好上几个数量级**——唯一的痛点是以前得靠自己手动在几个窗口之间来回复制粘贴。
 
-**`antigravity-agent-bridge`（v5.0）** 在 Antigravity 内部原生打通了这一闭环：
+**`antigravity-agent-bridge`（v5.1）** 就是为了把这套「**人跟 Gemini 舒服聊思路 → Gemini 生成专业 Prompt → 自动派发 Codex / Claude / Pi 高精度执行与互审**」的工作流原生内嵌进 Antigravity：
 
 1. **100% 原生 Antigravity 界面风格与实时主题同步**
    - 直接绑定 Antigravity 宿主实时注入 `:root` 的主题变量（`--background`、`--foreground`、`--card`、`--border`、`--primary`、`--font-family`），`MutationObserver` 同帧响应亮色 / 暗色 / 自定义主题切换，零色差接缝；随左侧 Antigravity 会话切换 **1:1 自动联动对应窗口**。
