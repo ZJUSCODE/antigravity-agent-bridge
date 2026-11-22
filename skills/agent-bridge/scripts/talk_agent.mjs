@@ -111,7 +111,7 @@ if (args.promptFile) {
 
 if (!rawBody.trim() && args.images.length === 0 && args.files.length === 0) {
   console.error(
-    'Usage: node talk_agent.mjs [--agent codex|pi|claude|gemini|opencode|council] [--agents codex,pi] [--room <ID>] [--cwd <DIR>] [--protocol rfc|review|debug|audit|free] [--round 1/2] [--sandbox read-only|workspace-write] [--diff-git] [--file <path>] (--prompt "<text>" | --prompt-file <path> | --stdin)'
+    'Usage: node talk_agent.mjs [--agent codex|pi|claude|gemini|opencode|council] [--agents codex,pi] [--room <ID>] [--cwd <DIR>] [--protocol rfc|review|debug|audit|free] [--round 1] [--sandbox read-only|workspace-write] [--diff-git] [--file <path>] (--prompt "<text>" | --prompt-file <path> | --stdin)'
   );
   process.exit(2);
 }

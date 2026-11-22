@@ -1306,7 +1306,7 @@ function buildFallbackMeta(safeConv) {
     effort: 'medium',
     sandbox: 'workspace-write',
     approvalPolicy: 'on-request',
-    mode: 'dual-2',
+    mode: 'auto',
     cwd: null,
     status: 'idle',
     turnLease: null,
@@ -1781,7 +1781,7 @@ export function createNewRoom({ cwd, model, effort, mode, approvalPolicy } = {})
     model: model || resolveDefaultCodexModel(),
     effort: effort || 'medium',
     approvalPolicy: approvalPolicy || 'on-request',
-    mode: mode || 'dual-2',
+    mode: mode || 'auto',
     cwd: cwd ? normalizeDirPath(cwd) : null,
     status: 'idle',
     turnLease: null,
@@ -3517,8 +3517,9 @@ export function buildPeerEnvelope({
   attachedFileNames = [],
 }) {
   const proto = PEER_PROTOCOLS[protocol] || PEER_PROTOCOLS.free;
-  const roundLabel = round ? ` · 第 ${round} 轮` : '';
-  const displayPrefix = protocol !== 'free' || round ? `**[${proto.tag}${roundLabel}]**\n\n` : '';
+  const cleanRound = String(round || '').trim().replace(/^第\s*|\s*轮$/g, '');
+  const roundLabel = cleanRound ? ` · 第 ${cleanRound} 轮` : '';
+  const displayPrefix = protocol !== 'free' || cleanRound ? `**[${proto.tag}${roundLabel}]**\n\n` : '';
   const filesNote = attachedFileNames.length ? `\n\n*(已附带 ${attachedFileNames.length} 份带行号源码快照: ${attachedFileNames.join(', ')})*` : '';
   const cleanBody = String(body || '').trim();
   const displayBody = cleanBody.length > 4000 ? `${cleanBody.slice(0, 4000)}\n\n*(长上下文已折叠进后台协议载荷)*` : cleanBody;
@@ -3527,7 +3528,7 @@ export function buildPeerEnvelope({
   const headlineTopic = deriveCleanRoomTitle(cleanBody, 48) || proto.tag;
   const wireParts = [
     `# [双AI] ${headlineTopic}`,
-    `[PEER-EXCHANGE-FROM-${fromAgent.toUpperCase()} | TO: ${toAgent} | PROTOCOL: ${protocol.toUpperCase()}${round ? ` | ROUND: ${round}` : ''}]`,
+    `[PEER-EXCHANGE-FROM-${fromAgent.toUpperCase()} | TO: ${toAgent} | PROTOCOL: ${protocol.toUpperCase()}${cleanRound ? ` | ROUND: ${cleanRound}` : ''}]`,
     `你正在与本地同侪智能体 **${fromAgent}** 进行专业工程对等协商。注意：当前处于被调用端，请直接输出你的独立专业结论，**严禁**反向调用同侪桥接脚本（防止递归死循环）。`,
     `### 本轮协作规程（${proto.tag}）\n${proto.guide}`,
     `### ${fromAgent} 本轮发言\n${cleanBody}`,

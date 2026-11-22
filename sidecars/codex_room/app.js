@@ -18,10 +18,30 @@
   ];
 
   const MODE_OPTIONS = [
-    { id: 'dual-2', short: '协同 2轮', title: '多智能体自动协商 · 2 轮', desc: 'Antigravity 与所选智能体自动往返 2 轮并收敛结论' },
-    { id: 'dual-3', short: '协同 3轮', title: '多智能体深入辩论 · 3 轮', desc: '双方或多方深入推演与交叉审查 3 轮' },
-    { id: 'direct', short: '直连单聊', title: '直连当前所选智能体（或圆桌群聊）', desc: '直接向当前所选 Agent 发送消息并实时流式查看输出' },
+    {
+      id: 'auto',
+      short: '智能轮次',
+      title: '智能协同 · 自主决策轮次（推荐）',
+      desc: '由 Antigravity 根据议题复杂度与收敛信号自主决定往返 1～N 轮，达成共识即止',
+    },
+    {
+      id: 'dispatch',
+      short: '主控派工',
+      title: '主控决策 → 派工闭环验收',
+      desc: 'Antigravity 定方案并派发所选 Agent 落盘写码跑测试，循环复审 Diff 直至验收通过',
+    },
+    {
+      id: 'direct',
+      short: '直连单聊',
+      title: '直连当前所选智能体（或圆桌群聊）',
+      desc: '不经主窗口编排，直接向当前所选 Agent 发送消息并实时流式查看输出',
+    },
   ];
+
+  function normalizeCollaborationMode(rawMode) {
+    if (rawMode === 'direct' || rawMode === 'dispatch' || rawMode === 'auto') return rawMode;
+    return 'auto';
+  }
 
   const CHECK_SVG = `<svg class="pop-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-6.5"/></svg>`;
 
@@ -668,7 +688,7 @@
   }
 
   function renderModeMenu() {
-    const curMode = state.meta?.mode || 'dual-2';
+    const curMode = normalizeCollaborationMode(state.meta?.mode);
     $('mode-list').innerHTML = MODE_OPTIONS.map((m) => {
       const active = m.id === curMode;
       return `
@@ -698,7 +718,7 @@
       path: targetPath,
       model: state.meta?.model || state.models[0]?.slug || 'auto',
       effort: state.meta?.effort || 'medium',
-      mode: state.meta?.mode || 'dual-2',
+      mode: normalizeCollaborationMode(state.meta?.mode),
       approvalPolicy: state.meta?.approvalPolicy || 'on-request',
     });
     resetRoomViewState(res.roomId);
@@ -1085,7 +1105,7 @@
       cwd: targetCwd,
       model: state.meta?.model || state.models[0]?.slug || 'auto',
       effort: state.meta?.effort || 'medium',
-      mode: state.meta?.mode || 'dual-2',
+      mode: normalizeCollaborationMode(state.meta?.mode),
       approvalPolicy: state.meta?.approvalPolicy || 'on-request',
     });
     resetRoomViewState(res.roomId);
@@ -1461,7 +1481,8 @@
     const apprInfo = APPROVAL_OPTIONS.find((a) => a.id === meta.approvalPolicy) || APPROVAL_OPTIONS[0];
     $('approval-label').textContent = apprInfo.short;
 
-    const modeInfo = MODE_OPTIONS.find((m) => m.id === meta.mode) || MODE_OPTIONS[0];
+    const normalizedMode = normalizeCollaborationMode(meta.mode);
+    const modeInfo = MODE_OPTIONS.find((m) => m.id === normalizedMode) || MODE_OPTIONS[0];
     $('mode-label').textContent = modeInfo.short;
 
     const openCodexBtn = $('btn-open-codex');
@@ -1774,7 +1795,7 @@
       effort: state.meta.effort || 'medium',
       approvalPolicy: state.meta.approvalPolicy || 'on-request',
       cwd: state.meta.cwd || null,
-      mode: state.meta.mode || 'dual-2',
+      mode: normalizeCollaborationMode(state.meta.mode),
     };
 
     state.submitting = true;
@@ -1804,12 +1825,11 @@
           await triggerImmediateRefresh();
         }
       } else {
-        const rounds = snapCtx.mode === 'dual-3' ? 3 : 2;
         const announceRes = await apiPost('/api/announce-topic', {
           conversationId: snapCtx.hostId,
           roomId: snapCtx.roomId,
           topic: text,
-          rounds,
+          mode: snapCtx.mode,
           attachments,
         });
         const finalRoomId = announceRes.roomId || snapCtx.roomId;
@@ -1824,10 +1844,11 @@
           : '';
         const cwdInfo = snapCtx.cwd ? `\n工作目录：${snapCtx.cwd}` : '';
         const peerName = activeAgentObj().displayName || snapCtx.activeAgent;
+        const baseCliHint = `调用 talk_agent.mjs（传入 --agent "${snapCtx.activeAgent}" --room "${finalRoomId}" --model "${snapCtx.model}" --effort "${snapCtx.effort}"${snapCtx.cwd ? ` --cwd "${snapCtx.cwd}"` : ''} ${attFlags}）`;
 
-        const instruction =
-          `请围绕以下议题，调用 talk_agent.mjs（传入 --agent "${snapCtx.activeAgent}" --room "${finalRoomId}" --model "${snapCtx.model}" --effort "${snapCtx.effort}"${snapCtx.cwd ? ` --cwd "${snapCtx.cwd}"` : ''} ${attFlags}）` +
-          `在右侧对讲室中与 ${peerName} 自动有来有回协商 ${rounds} 轮，讨论结束后在对话框给我最终结论：\n\n议题：${text || '请分析所附图片/文件'}${cwdInfo}${attContext}`;
+        const instruction = snapCtx.mode === 'dispatch'
+          ? `请先制定清晰的技术方案与验收标准，然后${baseCliHint}（加 --sandbox workspace-write）派发给 ${peerName} 落盘实现并运行测试，完成后你独立审查其 Git Diff（若有问题继续打回迭代，轮次由你自主决定，直至完全通过验收），最后向我汇报交付结论：\n\n任务：${text || '请分析并处理所附图片/文件'}${cwdInfo}${attContext}`
+          : `请围绕以下议题，${baseCliHint}在右侧对讲室中与 ${peerName} 开展专业工程协商。交流轮次（1～N 轮）由你根据问题复杂度与对方返回的收敛状态（CONVERGED / NEEDS_ROUND 或 PASS / CHANGES_REQUIRED）自主动态决策：首轮即达成共识可立即收敛，存在实质分歧或待核实隐患则继续追问深挖（每轮之间在对话框输出简明交锋进展），完全收敛后给我最终结论：\n\n议题：${text || '请分析所附图片/文件'}${cwdInfo}${attContext}`;
 
         await window.sidecar.agent.sendMessage(instruction, snapCtx.hostId !== 'global-default' ? snapCtx.hostId : undefined);
 

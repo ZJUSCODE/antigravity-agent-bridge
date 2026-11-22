@@ -16,20 +16,20 @@ description: 与本地 OpenAI Codex 进行专业多轮工程协商、架构方�
    - `debug`：疑难故障双盲根因假设与最小证伪实验设计。
    - `audit`：实现完成后的洁净室独立验收核查。
    - `free` + `--sandbox workspace-write`：**主从决策→执行模式**（Antigravity 拍板架构与验收标准后，指令 Codex 在工作区内直接落盘编码、运行单测并返回结果，再由 Antigravity 做独立 Diff 验收）。
-3. **执行有状态多轮闭环与逐轮透明播报（默认 2 轮，上限 4 轮）**：
+3. **由 Antigravity 自主动态决策轮次（1～N 轮智能收敛）与逐轮透明播报**：
    - 调用 [talk_codex.mjs](./scripts/talk_codex.mjs) 发送立论或任务书（长文本、多行代码或含引号内容优先写入临时 UTF-8 文件后通过 `--prompt-file` 传入，跨平台零转义损坏）。
-   - 审读返回的 Codex 意见与末尾状态标记（`[PEER_STATUS: CONVERGED | NEEDS_ROUND]` 或 `[PEER_VERDICT: PASS | CHANGES_REQUIRED]`）。
-   - **逐轮播报铁律**：若需进入下一轮（`Round 2/N` 等），在调用下一轮脚本前，**必须**先在当前主对话框输出 3-5 行 **「🔄 第 k/N 轮交锋进展」**（概括 Codex 提出的核心异议/缺陷及我方验证或回应方向），**严禁**不发一言连续静默跑完所有轮次。
+   - **动态轮次决策**：除非用户明确要求固定轮数，否则**禁止预设死板的 2 轮或 3 轮**。直接传入开放式当前轮次 `--round 1`、`--round 2`、`--round 3`…，由 Antigravity 根据源码验证及末尾状态标记（`[PEER_STATUS: CONVERGED | NEEDS_ROUND]` 或 `[PEER_VERDICT: PASS | CHANGES_REQUIRED]`）自主决定：首轮完全无异议且零缺陷则 1 轮即止；存在实质分歧或必改缺陷则持续追问或打回迭代 N 轮直至真正闭环（若连续超过 6 轮仍路线僵持，再提炼分歧交用户拍板）。
+   - **逐轮播报铁律**：若决定进入下一轮（`Round k+1`），在调用下一轮脚本前，**必须**先在当前主对话框输出 3-5 行 **「🔄 第 k 轮交锋进展与追问焦点」**，**严禁**不发一言连续静默跑完所有轮次。
 
 ## 2. 跨平台标准调用示例（Bash / Zsh / PowerShell 通用正斜杠路径）
 
 ```bash
-# 1) 架构碰撞第 1/2 轮（默认只读）：
+# 1) 架构碰撞第 1 轮（默认只读，后续是否进入第 2、3…N 轮由 Antigravity 按收敛情况动态决定）：
 node "$HOME/.gemini/config/plugins/codex-bridge/skills/codex-chat/scripts/talk_codex.mjs" \
   --conv "<当前Conversation_ID>" \
   --cwd "<项目根目录>" \
   --protocol rfc \
-  --round 1/2 \
+  --round 1 \
   --effort medium \
   --prompt-file "<UTF-8议题文件路径>"
 
@@ -38,7 +38,7 @@ node "$HOME/.gemini/config/plugins/codex-bridge/skills/codex-chat/scripts/talk_c
   --conv "<当前Conversation_ID>" \
   --cwd "<项目根目录>" \
   --protocol review \
-  --round 1/2 \
+  --round 1 \
   --diff-git \
   --file "<关键源码路径>" \
   --prompt "请重点审查本次并发锁与异常回退分支是否存在竞态或句柄泄漏。"
@@ -59,7 +59,7 @@ node "$HOME/.gemini/config/plugins/codex-bridge/skills/codex-chat/scripts/talk_c
 | :--- | :--- |
 | `--conv <id>` / `--room <id>` | 当前 Antigravity 会话 ID（自动绑定对应对讲室窗口）或显式指定房间 ID |
 | `--protocol <mode>` | `rfc` \| `review` \| `debug` \| `audit` \| `free` |
-| `--round <k/N>` | 轮次进度标记（如 `1/2`、`2/2`），同步展示在对讲室气泡标题与协议头中 |
+| `--round <k>` | 当前轮次标记（推荐开放式 `--round 1`、`--round 2`…；若用户指定固定总轮数也可传 `1/N`） |
 | `--diff-git` | 自动采集 `--cwd` 下的 `git status --short` 与 `git diff HEAD` 供对方审查 |
 | `--file <path>` | 附加带行号源码快照进后台协议载荷（可重复传入；审查工作区外文件时必传） |
 | `--prompt <text>` / `--prompt-file <p>` / `--stdin` | 消息输入（长文本推荐 `--prompt-file`） |

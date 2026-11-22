@@ -46,7 +46,10 @@ node "$HOME/.gemini/config/plugins/codex-bridge/skills/agent-bridge/scripts/talk
      --diff-git \
      --prompt "Independently audit the current git diff for race conditions, security edge cases, and regressions."
    ```
-4. **Transparent Round-by-Round Updates**: Between rounds (`--round 1/2`, `--round 2/2`), summarize key points of agreement/disagreement in the main chat before launching the next round.
+4. **Autonomous Convergence-Driven Rounds (`1..N`) & Transparent Updates**:
+   - Unless the user explicitly requests a fixed round count, **Antigravity autonomously decides how many rounds (`1..N`) to run** based on task complexity, code verification, and peer status markers (`[PEER_STATUS: CONVERGED | NEEDS_ROUND]` or `[PEER_VERDICT: PASS | CHANGES_REQUIRED]`).
+   - Pass open-ended round numbers (`--round 1`, `--round 2`, `--round 3`, `--round 4`…). Stop immediately after Round 1 if fully converged with zero issues; continue iterating as many rounds as needed until genuine consensus or clean verification (`PASS`) is achieved (escalate to the user if fundamental architectural trade-offs remain deadlocked past 6 rounds).
+   - Between rounds, post a concise **"Round k Progress & Next-Step Rationale"** summary in the main chat before launching Round `k+1`.
 
 ## 3. Guardrails
 

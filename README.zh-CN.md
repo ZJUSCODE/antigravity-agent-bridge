@@ -39,9 +39,10 @@
    | **自定义 CLI** | *任意命令* | 声明式 `agents.custom.json` | 模板变量注入 | 10 行 JSON 接入 `Aider`、`Qwen`、`Goose` 等 |
 3. **「群策圆桌（Council）」多智能体并行会诊**
    - 在面板底部切换至 **「圆桌群聊 (Council)」** 或通过 `--agents codex,pi,claude` 发起调用，即可将架构方案或未提交的 Git 改动**同时并发派给本机所有已就绪智能体**，同屏对比多方独立审计结论。
-4. **三种工程协作模式大白话直达**
-   - **你提需求 → Antigravity 决策 → 派发任意 Agent 落地执行 → Antigravity 独立验收 Diff**
-   - **双 / 多 AI 多轮架构方案碰撞（RFC / Debug）**
+4. **由 Antigravity 自主动态决策轮次（1～N 轮自适应收敛）+ 三种工程协作闭环**
+   - **告别机械锁死 2 轮或 3 轮**：由 Antigravity 根据议题复杂度、源码验证结果与收敛信号（`CONVERGED / NEEDS_ROUND`、`PASS / CHANGES_REQUIRED`）动态决定往返 **1～N 轮**——首轮达成共识 1 轮即止不浪费 Token；存在技术分歧或审查出必改项则自动推进第 2、3、4…N 轮深挖或打回重修，直至真正闭环。
+   - **你提需求 → Antigravity 决策 → 派发任意 Agent 落地执行 → 循环复审 Diff 直至验收通过**
+   - **双 / 多 AI 自适应多轮架构方案碰撞（RFC / Debug）**
    - **洁净室对抗式代码互审（Review `P0–P3` 分级定位 `文件:行号`）**
 5. **双向对等互调与防死循环安全内核**
    - 安装时自动为本机已安装的 **Codex**（`~/.codex/skills/`）、**Pi**（`~/.pi/agent/skills/`）与 **Claude Code**（`~/.claude/skills/`）挂载反向呼叫 Antigravity 的同侪技能，内置 `AGY_CODEX_PEER_CALL=1` 硬件级防递归死锁锁与跨进程 PID 租约锁。
@@ -71,8 +72,8 @@ npm run doctor
 ```
 
 装好后，直接在 Antigravity 对话框用大白话吩咐即可：
-- *“打开右侧对讲室，和 **Codex**（或 **Pi** / **Claude Code**）讨论两轮这个模块的架构方案”*
-- *“你先定好接口规范，然后直接派 **Pi** 写前端、派 **Codex** 写后端单测，你审查通过再交付给我”*
+- *“打开右侧对讲室，和 **Codex**（或 **Pi** / **Claude Code**）深入碰撞这个模块的架构方案，轮次由你定，达成共识后给我结论”*
+- *“你先定好接口规范，然后直接派 **Pi** 写前端、派 **Codex** 写后端单测，你循环审查到零缺陷再交付给我”*
 - *“开一轮 **圆桌群聊（Council）**，让本机所有 Agent 并行审查一下我当前的 Git 未提交改动”*
 
 ---

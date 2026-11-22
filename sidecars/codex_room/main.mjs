@@ -417,15 +417,21 @@ export function buildSidecarApp(bridge = new AppServerBridge()) {
   app.api('/api/announce-topic', (data) => {
     const roomId = resolveRoomId(data, app.config.conversationId);
     const topic = String(data.topic || '').trim();
-    const rounds = Number(data.rounds) || 2;
+    const explicitRounds = Number(data.rounds);
+    const mode = String(data.mode || 'auto');
     const verifiedAttachments = sanitizeClientAttachments(roomId, data.attachments);
     if (!topic && verifiedAttachments.length === 0) {
       throw new Error('请输入讨论议题或添加有效附件。');
     }
+    const modeSuffix = Number.isInteger(explicitRounds) && explicitRounds > 0
+      ? `（协同讨论 ${explicitRounds} 轮）`
+      : mode === 'dispatch'
+        ? '（主控决策 → 派工闭环验收）'
+        : '（多智能体协同 · Antigravity 自主决策轮次）';
     appendMessage(roomId, {
       sender: 'user',
       senderLabel: '你（发起议题）',
-      text: `${topic || '请分析附件内容'}（双 AI 自动讨论 ${rounds} 轮）`,
+      text: `${topic || '请分析附件内容'}${modeSuffix}`,
       attachments: verifiedAttachments,
     });
     writeMeta(roomId, { lastError: null });

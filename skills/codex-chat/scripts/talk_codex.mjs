@@ -88,7 +88,7 @@ if (args.promptFile) {
 
 if (!rawBody.trim() && args.images.length === 0 && args.files.length === 0) {
   console.error(
-    'Usage: node talk_codex.mjs --conv <CONV_ID> [--room <ROOM_ID>] [--protocol rfc|review|debug|audit|free] [--round 1/2] [--diff-git] [--file <path>] (--prompt "<text>" | --prompt-file <path> | --stdin)'
+    'Usage: node talk_codex.mjs --conv <CONV_ID> [--room <ROOM_ID>] [--protocol rfc|review|debug|audit|free] [--round 1] [--diff-git] [--file <path>] (--prompt "<text>" | --prompt-file <path> | --stdin)'
   );
   process.exit(2);
 }

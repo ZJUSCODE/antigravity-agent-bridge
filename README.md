@@ -37,7 +37,8 @@ Modern AI-assisted engineering rarely relies on a single model. Architects often
   | **OpenCode** | `opencode` | `opencode run --format json` | `-s <session_id>` | Scoped workspace execution |
   | **Custom CLI** | *Any CLI* | Declarative `agents.custom.json` | Optional template | Custom args (`Aider`, `Qwen`, `Goose`…) |
 - **Parallel Multi-Agent Council ("群策圆桌")**: Broadcast one architectural RFC or uncommitted `git diff` to **all installed agents in parallel** (`--agent council` or `--agents codex,pi,claude`), watching each agent stream its independent verdict into the same room.
-- **Architect → Executor Dispatch**: Tell Antigravity in plain language: *"Design the plan yourself, dispatch implementation & tests to Codex / Pi / Claude, then audit the git diff before handing back."*
+- **Adaptive Convergence-Driven Rounds (`1..N`)**: No rigid "2-round" or "3-round" limits — Antigravity autonomously governs the number of discussion or review-fix-verify rounds based on task complexity and peer convergence signals (`[PEER_STATUS: CONVERGED | NEEDS_ROUND]`, `[PEER_VERDICT: PASS | CHANGES_REQUIRED]`), stopping in 1 round when aligned or iterating 4+ rounds until every `P0/P1` issue is resolved.
+- **Architect → Executor Dispatch**: Tell Antigravity in plain language: *"Design the plan yourself, dispatch implementation & tests to Codex / Pi / Claude, and iterate review-and-fix rounds until the diff passes."*
 - **Bidirectional Peer Skills**: Installs `agent-bridge` & `codex-chat` into Antigravity **and** automatically installs the reverse `antigravity-chat` skill into `~/.codex/skills/`, `~/.pi/agent/skills/`, and `~/.claude/skills/` so external agents can consult local Antigravity (`agy`) too — guarded by `AGY_CODEX_PEER_CALL=1` hardware-level anti-recursion locks.
 
 ---
@@ -65,8 +66,8 @@ npm run doctor
 ```
 
 Then simply talk to Antigravity in plain language:
-- *"Open the Aux-Pane Roundtable and debate our database sharding design for 2 rounds with **Codex**."*
-- *"Design the API contract yourself, then dispatch implementation and unit tests to **Pi** (or **Claude Code**), and review the diff."*
+- *"Open the Aux-Pane Roundtable and debate our database sharding design with **Codex** until you both converge on the schema."*
+- *"Design the API contract yourself, dispatch implementation and unit tests to **Pi** (or **Claude Code**), and iterate until your diff review passes."*
 - *"Run a parallel **Council** code review (`Codex + Pi + Claude`) on my uncommitted Git changes."*
 
 ---

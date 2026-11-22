@@ -445,6 +445,17 @@ describe('codex-bridge enterprise core & bridge suite', () => {
     assert.match(env.wirePrompt, /\[P0 致命/);
     assert.match(env.wirePrompt, /\+lock\(\)/);
 
+    const openEndedEnv = core.buildPeerEnvelope({
+      protocol: 'rfc',
+      round: '4',
+      fromAgent: 'Antigravity',
+      toAgent: 'Codex',
+      body: '继续验证第 4 轮分片边界。',
+    });
+    assert.match(openEndedEnv.displayText, /\*\*\[架构方案碰撞 · 第 4 轮\]\*\*/);
+    assert.match(openEndedEnv.wirePrompt, /ROUND: 4\]/);
+    assert.equal(core.createNewRoom().mode, 'auto');
+
     // Enforce anti-recursion guard when AGY_CODEX_PEER_CALL=1
     process.env.AGY_CODEX_PEER_CALL = '1';
     try {
