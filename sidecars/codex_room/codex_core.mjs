@@ -86,6 +86,7 @@ export function closeAllRoomWatchers() {
 
 export function resetCoreCaches() {
   closeAllRoomWatchers();
+  invalidateCodexBinaryCache();
   metaCache.clear();
   messagesCache.clear();
   globalLiveCache = { mtimeMs: -1, size: -1, data: null };
@@ -1028,7 +1029,13 @@ export function invalidateCodexBinaryCache() {
 }
 
 export function findCodexBinary({ forceRefresh = false } = {}) {
-  if (!forceRefresh && cachedBinaryInfo && Date.now() - cachedBinaryCheckedAt < 30000 && existsSync(cachedBinaryInfo.exe)) {
+  if (
+    !forceRefresh
+    && cachedBinaryInfo
+    && Date.now() - cachedBinaryCheckedAt < 30000
+    && (!process.env.CODEX_BIN || cachedBinaryInfo.exe === process.env.CODEX_BIN)
+    && existsSync(cachedBinaryInfo.exe)
+  ) {
     return cachedBinaryInfo;
   }
 
@@ -1199,8 +1206,11 @@ export async function spawnCodexProcessWithRetry(args, { cwd, baseEnv = process.
     try {
       const child = await new Promise((resolveSpawn, rejectSpawn) => {
         let proc;
+        const isJsEntry = /\.(?:c?m?js)$/i.test(binInfo.exe);
+        const spawnCmd = isJsEntry ? process.execPath : binInfo.exe;
+        const spawnArgs = isJsEntry ? [binInfo.exe, ...args] : args;
         try {
-          proc = spawn(binInfo.exe, args, {
+          proc = spawn(spawnCmd, spawnArgs, {
             ...(cwd ? { cwd } : {}),
             env: childEnv,
             stdio,
@@ -1297,6 +1307,7 @@ function buildFallbackMeta(safeConv) {
     importCompleted: false,
     importSourceSessionId: null,
     codexThreadId: null,
+    codexThreadsByCwd: {},
     agyConversationId: null,
     activeAgent: 'codex',
     agentSessions: {},
@@ -1773,6 +1784,7 @@ export function createNewRoom({ cwd, model, effort, mode, approvalPolicy } = {})
     pinned: false,
     messageCount: 0,
     codexThreadId: null,
+    codexThreadsByCwd: {},
     agyConversationId: null,
     activeAgent: 'codex',
     agentSessions: {},
@@ -1794,11 +1806,19 @@ export function renameRoom(convId, newTitle) {
   const safe = assertValidExplicitRoomId(convId);
   const clean = String(newTitle || '').replace(/\s+/g, ' ').trim().slice(0, 60);
   if (!clean) throw new Error('标题不能为空');
-  const nextMeta = writeMeta(safe, { title: clean });
+  const cur = readMeta(safe);
+  const desktopTitle = formatCodexDesktopThreadName(clean, '');
+  const updatedByCwd = (cur.codexThreadId && cur.cwd)
+    ? buildUpdatedCodexThreadsByCwd(cur.codexThreadsByCwd, cur.cwd, cur.codexThreadId, desktopTitle)
+    : (cur.codexThreadsByCwd || {});
+  const nextMeta = writeMeta(safe, {
+    title: clean,
+    ...(cur.codexThreadId ? { codexNamedTitle: desktopTitle, codexThreadsByCwd: updatedByCwd } : {}),
+  });
   if (nextMeta.codexThreadId) {
     syncCodexDesktopCatalogEntry({
       threadId: nextMeta.codexThreadId,
-      title: formatCodexDesktopThreadName(clean, ''),
+      title: desktopTitle,
       cwd: nextMeta.cwd || undefined,
     });
   }
@@ -2626,6 +2646,8 @@ export function resetCodexThread(convId, { clearHistory = false } = {}) {
     roomEpoch: nextEpoch,
     messageCount: clearHistory ? 0 : readMessages(safeConv).length,
     codexThreadId: null,
+    codexThreadsByCwd: {},
+    codexNamedTitle: '',
     needsForkOnNextTurn: false,
     forkFromSessionId: null,
     cancelRequestedAt: Date.now(),
@@ -2634,6 +2656,41 @@ export function resetCodexThread(convId, { clearHistory = false } = {}) {
     activeTurn: null,
     lastError: null,
   });
+}
+
+export function getCodexThreadForCwd(meta, chosenCwd) {
+  if (!meta || !chosenCwd) return null;
+  const targetKey = toPathKey(normalizeDirPath(chosenCwd));
+  const byCwd = meta.codexThreadsByCwd && typeof meta.codexThreadsByCwd === 'object' && !Array.isArray(meta.codexThreadsByCwd)
+    ? meta.codexThreadsByCwd
+    : {};
+  const hit = byCwd[targetKey];
+  if (hit) {
+    if (typeof hit === 'string') return { threadId: hit, title: '' };
+    if (typeof hit.threadId === 'string' && hit.threadId) {
+      return { threadId: hit.threadId, title: String(hit.title || '') };
+    }
+  }
+  const prevCwdKey = meta.cwd ? toPathKey(normalizeDirPath(meta.cwd)) : '';
+  if (meta.codexThreadId && (!prevCwdKey || prevCwdKey === targetKey)) {
+    return { threadId: meta.codexThreadId, title: String(meta.codexNamedTitle || '') };
+  }
+  return null;
+}
+
+export function buildUpdatedCodexThreadsByCwd(prevMap, chosenCwd, threadId, title = '') {
+  const base = (prevMap && typeof prevMap === 'object' && !Array.isArray(prevMap))
+    ? { ...prevMap }
+    : {};
+  if (!chosenCwd || !threadId) return base;
+  const key = toPathKey(normalizeDirPath(chosenCwd));
+  const existing = base[key];
+  const prevTitle = (existing && typeof existing === 'object') ? String(existing.title || '') : '';
+  base[key] = {
+    threadId,
+    title: title || prevTitle,
+  };
+  return base;
 }
 
 function summarizeCommand(cmd) {
@@ -2724,9 +2781,14 @@ export async function runCodexTurn({
       mkdirSync(chosenCwd, { recursive: true });
       ensureUploadsDir(safeConv);
 
-      const cwdChanged = prevMeta.cwd && normalizeDirPath(prevMeta.cwd).toLowerCase() !== chosenCwd.toLowerCase();
+      const cwdChanged = Boolean(prevMeta.cwd && toPathKey(normalizeDirPath(prevMeta.cwd)) !== toPathKey(chosenCwd));
+      const hadPriorRoomThread = Boolean(
+        prevMeta.codexThreadId
+        || (prevMeta.codexThreadsByCwd && Object.keys(prevMeta.codexThreadsByCwd).length > 0)
+      );
       const explicitFork = !newThread && !cwdChanged && Boolean(prevMeta.needsForkOnNextTurn && prevMeta.forkFromSessionId);
-      const rawCandidateResume = (newThread || cwdChanged || explicitFork) ? null : (prevMeta.codexThreadId || null);
+      const matchedCwdEntry = (!newThread && !explicitFork) ? getCodexThreadForCwd(prevMeta, chosenCwd) : null;
+      const rawCandidateResume = matchedCwdEntry?.threadId || null;
       const promoteExecViaFork = Boolean(rawCandidateResume && isLegacyExecThread(rawCandidateResume));
       const shouldFork = explicitFork || promoteExecViaFork;
       const forkSourceId = explicitFork ? prevMeta.forkFromSessionId : (promoteExecViaFork ? rawCandidateResume : null);
@@ -2771,9 +2833,10 @@ export async function runCodexTurn({
         steps: [],
       };
 
+      // Always sync `cwd: chosenCwd` so subsequent rounds in the same folder never falsely trigger `cwdChanged`!
       const prefPatch = persistPrefs
         ? { model: chosenModel, effort: chosenEffort, sandbox: chosenSandbox, cwd: chosenCwd }
-        : { cwd: prevMeta.cwd || chosenCwd };
+        : { cwd: chosenCwd };
 
       const updatedRoomMeta = writeMeta(safeConv, {
         ...prefPatch,
@@ -2799,7 +2862,7 @@ export async function runCodexTurn({
       return await new Promise((resolveTurn, rejectTurn) => {
         let resolvedThreadId = threadToResume;
         let activeTurnId = null;
-        let codexNamedTitle = prevMeta.codexNamedTitle || '';
+        let codexNamedTitle = matchedCwdEntry?.title || (!hadPriorRoomThread ? (prevMeta.codexNamedTitle || '') : '');
         let streamErrorMsg = '';
         let stderrBuf = '';
         let stdoutRemainder = '';
@@ -2851,13 +2914,25 @@ export async function runCodexTurn({
           try { if (!child.killed) child.kill(); } catch {}
         };
 
+        const buildThreadMetaPatch = () => {
+          if (!resolvedThreadId) return { cwd: chosenCwd };
+          const curMap = readMeta(safeConv).codexThreadsByCwd || prevMeta.codexThreadsByCwd;
+          return {
+            cwd: chosenCwd,
+            codexThreadId: resolvedThreadId,
+            codexThreadsByCwd: buildUpdatedCodexThreadsByCwd(curMap, chosenCwd, resolvedThreadId, codexNamedTitle),
+            needsForkOnNextTurn: false,
+            forkFromSessionId: null,
+          };
+        };
+
         const flushSyncActive = () => {
           if (settled || wasCancelled) return;
           clearTimeout(syncTimer);
           syncTimer = null;
           lastSyncMs = Date.now();
           writeMeta(safeConv, {
-            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+            ...buildThreadMetaPatch(),
             ...(codexNamedTitle ? { codexNamedTitle } : {}),
             ...(tokenSummary ? { tokenUsage: tokenSummary } : {}),
             status: 'thinking',
@@ -2895,7 +2970,7 @@ export async function runCodexTurn({
             steps: activeTurn.steps,
           }, { expectedEpoch: roomEpoch, requireExists: true });
           const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
-            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId } : {}),
+            ...buildThreadMetaPatch(),
             ...(codexNamedTitle ? { codexNamedTitle } : {}),
             status: 'idle',
             activeTurn: null,
@@ -2942,7 +3017,7 @@ export async function runCodexTurn({
             }, { expectedEpoch: roomEpoch, requireExists: true });
           }
           releaseRoomTurnLease(safeConv, leaseId, {
-            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+            ...buildThreadMetaPatch(),
             ...(codexNamedTitle ? { codexNamedTitle } : {}),
             status: 'error',
             activeTurn: null,
@@ -2959,7 +3034,7 @@ export async function runCodexTurn({
           const durationMs = Date.now() - startedAt;
           if (!finalReply && !activeTurn.diff && streamErrorMsg) {
             releaseRoomTurnLease(safeConv, leaseId, {
-              ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+              ...buildThreadMetaPatch(),
               status: 'error',
               activeTurn: null,
               lastError: streamErrorMsg,
@@ -2983,7 +3058,7 @@ export async function runCodexTurn({
           }, { expectedEpoch: roomEpoch, requireExists: true });
 
           const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
-            ...(resolvedThreadId ? { codexThreadId: resolvedThreadId, needsForkOnNextTurn: false, forkFromSessionId: null } : {}),
+            ...buildThreadMetaPatch(),
             ...(codexNamedTitle ? { codexNamedTitle } : {}),
             ...(tokenSummary ? { tokenUsage: tokenSummary } : {}),
             status: 'idle',
@@ -3327,14 +3402,21 @@ export async function runCodexTurn({
               }, 8000).catch(() => {});
             }
 
-            const desiredName = formatCodexDesktopThreadName(updatedRoomMeta?.title || readMeta(safeConv).title, bubbleText);
+            const isSubsequentNewThread = Boolean(
+              createdOrForked && hadPriorRoomThread && !explicitFork && !promoteExecViaFork
+            );
+            const desiredName = isSubsequentNewThread
+              ? formatCodexDesktopThreadName('', bubbleText)
+              : (matchedCwdEntry?.title || formatCodexDesktopThreadName(updatedRoomMeta?.title || readMeta(safeConv).title, bubbleText));
             if (createdOrForked || desiredName !== codexNamedTitle) {
               await sendRpc('thread/name/set', {
                 threadId: resolvedThreadId,
                 name: desiredName,
               }, 8000).then(() => {
                 codexNamedTitle = desiredName;
-              }).catch(() => {});
+              }).catch(() => {
+                if (!codexNamedTitle) codexNamedTitle = desiredName;
+              });
             }
             if (resolvedThreadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
               syncCodexDesktopCatalogEntry({

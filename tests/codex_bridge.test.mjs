@@ -1,6 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { register } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir, tmpdir } from 'node:os';
@@ -776,5 +776,127 @@ describe('codex-bridge enterprise core & bridge suite', () => {
     const projMatch = core.getCodexDesktopProjectMatch(canonProjA);
     assert.equal(projMatch.matched, true);
     assert.equal(projMatch.projectName, 'proj-alpha');
+  });
+
+  it('reuses the exact same Codex thread across multi-round turns after cwd switches and avoids duplicate stale titles', async () => {
+    const rpcLogPath = join(tmpRoot, 'codex-rpc-events.jsonl');
+    const mockCodexAppServer = join(tmpRoot, 'mock-codex-appserver.mjs');
+    writeFileSync(
+      mockCodexAppServer,
+      [
+        `import { appendFileSync } from 'node:fs';`,
+        `import { createInterface } from 'node:readline';`,
+        `const logPath = process.env.MOCK_CODEX_RPC_LOG;`,
+        `let startSeq = Number(process.env.MOCK_CODEX_SEQ_SEED || 0);`,
+        `const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });`,
+        `const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');`,
+        `rl.on('line', (line) => {`,
+        `  if (!line.trim()) return;`,
+        `  const msg = JSON.parse(line);`,
+        `  if (msg.id === undefined) return;`,
+        `  if (msg.method === 'initialize') {`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { userAgent: 'mock-codex' } });`,
+        `  } else if (msg.method === 'project/list') {`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { data: [] } });`,
+        `  } else if (msg.method === 'project/create') {`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { project: { id: 'proj-mock' } } });`,
+        `  } else if (msg.method === 'thread/start') {`,
+        `    const tid = '019a0000-0000-7000-8000-' + String(++startSeq).padStart(12, '0');`,
+        `    appendFileSync(logPath, JSON.stringify({ method: 'thread/start', threadId: tid, cwd: msg.params?.cwd }) + '\\n');`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { thread: { id: tid, projectId: 'proj-mock' } } });`,
+        `  } else if (msg.method === 'thread/resume') {`,
+        `    appendFileSync(logPath, JSON.stringify({ method: 'thread/resume', threadId: msg.params?.threadId, cwd: msg.params?.cwd }) + '\\n');`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { thread: { id: msg.params.threadId, projectId: 'proj-mock' } } });`,
+        `  } else if (msg.method === 'thread/name/set') {`,
+        `    appendFileSync(logPath, JSON.stringify({ method: 'thread/name/set', threadId: msg.params?.threadId, name: msg.params?.name }) + '\\n');`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: {} });`,
+        `  } else if (msg.method === 'thread/metadata/update') {`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: {} });`,
+        `  } else if (msg.method === 'turn/start') {`,
+        `    const tid = msg.params.threadId;`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { turn: { id: 'turn_1' } } });`,
+        `    send({ jsonrpc: '2.0', method: 'turn/started', params: { threadId: tid, turn: { id: 'turn_1' } } });`,
+        `    send({ jsonrpc: '2.0', method: 'item/completed', params: { threadId: tid, turnId: 'turn_1', item: { id: 'm1', type: 'agentMessage', text: 'Ack on ' + tid + ' [PEER_STATUS: CONVERGED]' } } });`,
+        `    send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: tid, turn: { id: 'turn_1', status: 'completed' } } });`,
+        `    setTimeout(() => process.exit(0), 10);`,
+        `  }`,
+        `});`,
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const prevCodexBin = process.env.CODEX_BIN;
+    process.env.CODEX_BIN = mockCodexAppServer;
+    process.env.MOCK_CODEX_RPC_LOG = rpcLogPath;
+    core.invalidateCodexBinaryCache();
+
+    try {
+      process.env.MOCK_CODEX_SEQ_SEED = '100';
+      const r1ProjA = await core.runCodexTurn({
+        convId: 'room_multi_round_cwd',
+        prompt: '# RFC 议题：自研多店铺归因方案选型',
+        displayText: '**[架构方案碰撞 · 第 1 轮]**\n\n# RFC 议题：自研多店铺归因方案选型',
+        cwd: fakeProjectA,
+        persistPrefs: false,
+      });
+
+      process.env.MOCK_CODEX_SEQ_SEED = '200';
+      const r1ProjB = await core.runCodexTurn({
+        convId: 'room_multi_round_cwd',
+        prompt: '# RFC 议题：接入企业数据平台 EDP 边界确认',
+        displayText: '**[架构方案碰撞 · 第 1 轮]**\n\n# RFC 议题：接入企业数据平台 EDP 边界确认',
+        cwd: fakeProjectB,
+        persistPrefs: false,
+      });
+      assert.notEqual(r1ProjB.codexThreadId, r1ProjA.codexThreadId, 'switching to a new project folder starts 1 thread for that folder');
+
+      process.env.MOCK_CODEX_SEQ_SEED = '300';
+      const r2ProjB = await core.runCodexTurn({
+        convId: 'room_multi_round_cwd',
+        prompt: '# 第 2 轮 RFC 收敛：锁定共享主键与契约',
+        displayText: '**[架构方案碰撞 · 第 2 轮]**\n\n# 第 2 轮 RFC 收敛：锁定共享主键与契约',
+        cwd: fakeProjectB,
+        persistPrefs: false,
+      });
+      assert.equal(r2ProjB.codexThreadId, r1ProjB.codexThreadId, 'Round 2 in Project B MUST reuse Project B thread instead of opening a new conversation');
+
+      process.env.MOCK_CODEX_SEQ_SEED = '400';
+      const r3ProjB = await core.runCodexTurn({
+        convId: 'room_multi_round_cwd',
+        prompt: '# 第 3 轮 RFC 终审确认',
+        displayText: '**[架构方案碰撞 · 第 3 轮]**\n\n# 第 3 轮 RFC 终审确认',
+        cwd: fakeProjectB,
+        persistPrefs: false,
+      });
+      assert.equal(r3ProjB.codexThreadId, r1ProjB.codexThreadId, 'Round 3 in Project B MUST still reuse the same Project B thread');
+
+      process.env.MOCK_CODEX_SEQ_SEED = '500';
+      const rBackToProjA = await core.runCodexTurn({
+        convId: 'room_multi_round_cwd',
+        prompt: '# 回到归因蓝图补充落库字段',
+        displayText: '**[架构方案碰撞 · 第 2 轮]**\n\n# 回到归因蓝图补充落库字段',
+        cwd: fakeProjectA,
+        persistPrefs: false,
+      });
+      assert.equal(rBackToProjA.codexThreadId, r1ProjA.codexThreadId, 'switching back to Project A resumes Project A existing thread');
+
+      const rpcEvents = readFileSync(rpcLogPath, 'utf-8')
+        .trim()
+        .split(/\r?\n/)
+        .map((l) => JSON.parse(l));
+      const starts = rpcEvents.filter((e) => e.method === 'thread/start');
+      const resumes = rpcEvents.filter((e) => e.method === 'thread/resume');
+      const names = rpcEvents.filter((e) => e.method === 'thread/name/set');
+
+      assert.equal(starts.length, 2, 'only 2 threads started total across 5 turns in 2 folders');
+      assert.equal(resumes.length, 3, '3 turns resumed existing threads');
+      assert.equal(names.find((e) => e.threadId === r1ProjA.codexThreadId)?.name, '[双AI] RFC 议题：自研多店铺归因方案选型');
+      assert.equal(names.find((e) => e.threadId === r1ProjB.codexThreadId)?.name, '[双AI] RFC 议题：接入企业数据平台 EDP 边界确认');
+    } finally {
+      if (prevCodexBin) process.env.CODEX_BIN = prevCodexBin; else delete process.env.CODEX_BIN;
+      delete process.env.MOCK_CODEX_RPC_LOG;
+      delete process.env.MOCK_CODEX_SEQ_SEED;
+      core.invalidateCodexBinaryCache();
+    }
   });
 });

@@ -16,11 +16,13 @@ import { randomUUID } from 'node:crypto';
 import {
   acquireRoomTurnLease,
   appendMessage,
+  buildUpdatedCodexThreadsByCwd,
   deriveCleanRoomTitle,
   ensureRoomDir,
   ensureUploadsDir,
   findCodexBinary,
   formatCodexDesktopThreadName,
+  getCodexThreadForCwd,
   heartbeatRoomTurnLease,
   isLegacyExecThread,
   normalizeDirPath,
@@ -36,6 +38,7 @@ import {
   spawnCodexProcessWithRetry,
   stripWinPrefix,
   syncCodexDesktopCatalogEntry,
+  toPathKey,
   writeMeta,
 } from './codex_core.mjs';
 
@@ -523,6 +526,7 @@ export class AppServerBridge {
     let verifiedAtts;
     let rawText;
     let threadId = null;
+    let desiredDesktopTitle = '';
 
     try {
       await this.#ensureStarted();
@@ -551,9 +555,14 @@ export class AppServerBridge {
         throw new Error('请输入内容或添加有效附件。');
       }
 
-      const cwdChanged = prevMeta.cwd && normalizeDirPath(prevMeta.cwd).toLowerCase() !== chosenCwd.toLowerCase();
+      const cwdChanged = Boolean(prevMeta.cwd && toPathKey(normalizeDirPath(prevMeta.cwd)) !== toPathKey(chosenCwd));
+      const hadPriorRoomThread = Boolean(
+        prevMeta.codexThreadId
+        || (prevMeta.codexThreadsByCwd && Object.keys(prevMeta.codexThreadsByCwd).length > 0)
+      );
       const explicitFork = !newThread && !cwdChanged && Boolean(prevMeta.needsForkOnNextTurn && prevMeta.forkFromSessionId);
-      const rawCandidateResume = (!newThread && !cwdChanged && !explicitFork) ? prevMeta.codexThreadId : null;
+      const matchedCwdEntry = (!newThread && !explicitFork) ? getCodexThreadForCwd(prevMeta, chosenCwd) : null;
+      const rawCandidateResume = matchedCwdEntry?.threadId || null;
       const promoteExecViaFork = Boolean(rawCandidateResume && isLegacyExecThread(rawCandidateResume));
       const shouldFork = explicitFork || promoteExecViaFork;
       const forkSourceId = explicitFork ? prevMeta.forkFromSessionId : (promoteExecViaFork ? rawCandidateResume : null);
@@ -569,13 +578,13 @@ export class AppServerBridge {
         senderLabel,
         text: rawText || `已发送 ${verifiedAtts.length} 个附件`,
         attachments: verifiedAtts,
-        codexThreadId: prevMeta.codexThreadId,
+        codexThreadId: rawCandidateResume || forkSourceId,
         model: chosenModel,
         effort: chosenEffort,
       }, { expectedEpoch: roomEpoch, requireExists: true });
 
       // 2. Start / Fork / Resume thread (only clear fork source AFTER fork RPC succeeds!)
-      threadId = (!newThread && !cwdChanged && !shouldFork) ? prevMeta.codexThreadId : null;
+      threadId = (!shouldFork) ? rawCandidateResume : null;
       let createdOrForked = false;
       let currentThreadProjectId = null;
 
@@ -651,8 +660,13 @@ export class AppServerBridge {
         }, 6000).catch(() => {});
       }
 
-      const desiredDesktopTitle = formatCodexDesktopThreadName(readMeta(safeRoom).title, rawText);
-      if (createdOrForked) {
+      const isSubsequentNewThread = Boolean(
+        createdOrForked && hadPriorRoomThread && !explicitFork && !promoteExecViaFork
+      );
+      desiredDesktopTitle = isSubsequentNewThread
+        ? formatCodexDesktopThreadName('', rawText)
+        : (matchedCwdEntry?.title || formatCodexDesktopThreadName(readMeta(safeRoom).title, rawText));
+      if (createdOrForked || desiredDesktopTitle !== matchedCwdEntry?.title) {
         await this.#rpc('thread/name/set', { threadId, name: desiredDesktopTitle }, 6000).catch(() => {});
       }
       if (threadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
@@ -689,9 +703,20 @@ export class AppServerBridge {
       steps: [],
     };
 
+    const buildInteractiveThreadPatch = () => ({
+      codexThreadId: threadId,
+      codexThreadsByCwd: buildUpdatedCodexThreadsByCwd(
+        readMeta(safeRoom).codexThreadsByCwd || prevMeta.codexThreadsByCwd,
+        chosenCwd,
+        threadId,
+        desiredDesktopTitle
+      ),
+      ...(desiredDesktopTitle ? { codexNamedTitle: desiredDesktopTitle } : {}),
+    });
+
     try {
       writeMeta(safeRoom, {
-        codexThreadId: threadId,
+        ...buildInteractiveThreadPatch(),
         needsForkOnNextTurn: false,
         forkFromSessionId: null,
         model: chosenModel,
@@ -929,7 +954,7 @@ export class AppServerBridge {
         }, { expectedEpoch: roomEpoch, requireExists: true });
 
         const settledMeta = releaseRoomTurnLease(safeRoom, leaseId, {
-          codexThreadId: threadId,
+          ...buildInteractiveThreadPatch(),
           tokenUsage: tokenSummary,
           rateLimitPercent: bridgeSelf.#lastRateLimitPercent ?? prevMeta.rateLimitPercent ?? null,
           status: 'idle',
@@ -939,7 +964,7 @@ export class AppServerBridge {
         if (threadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
           syncCodexDesktopCatalogEntry({
             threadId,
-            title: formatCodexDesktopThreadName(settledMeta.title, rawText),
+            title: desiredDesktopTitle || formatCodexDesktopThreadName(settledMeta.title, rawText),
             cwd: chosenCwd,
           });
         }
@@ -963,7 +988,7 @@ export class AppServerBridge {
           }, { expectedEpoch: roomEpoch, requireExists: true });
         }
         const cancelledMeta = releaseRoomTurnLease(safeRoom, leaseId, {
-          codexThreadId: threadId,
+          ...buildInteractiveThreadPatch(),
           status: 'idle',
           activeTurn: null,
           lastError: null,
@@ -971,7 +996,7 @@ export class AppServerBridge {
         if (threadId && !chosenCwd.toLowerCase().includes('\\.gemini\\antigravity\\brain\\')) {
           syncCodexDesktopCatalogEntry({
             threadId,
-            title: formatCodexDesktopThreadName(cancelledMeta.title, rawText),
+            title: desiredDesktopTitle || formatCodexDesktopThreadName(cancelledMeta.title, rawText),
             cwd: chosenCwd,
           });
         }
@@ -995,7 +1020,7 @@ export class AppServerBridge {
           }, { expectedEpoch: roomEpoch, requireExists: true });
         }
         releaseRoomTurnLease(safeRoom, leaseId, {
-          codexThreadId: threadId,
+          ...buildInteractiveThreadPatch(),
           status: 'error',
           activeTurn: null,
           lastError: errMsg,

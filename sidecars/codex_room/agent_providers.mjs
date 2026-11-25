@@ -35,6 +35,7 @@ import {
   sanitizeClientAttachments,
   sanitizeConvId,
   stripWinPrefix,
+  toPathKey,
   writeMeta,
 } from './codex_core.mjs';
 
@@ -376,11 +377,15 @@ function buildCliAgentSpawnSpec({
   sandbox,
   approvalPolicy,
   cwd,
+  cwdChanged = false,
   roomTitle,
   newThread,
 }) {
   const explicitModel = model && model !== 'auto' ? model : '';
-  const prevSessionId = !newThread ? (sessionMap?.[agentId] || '') : '';
+  const cwdSessionKey = cwd ? `${agentId}:${toPathKey(normalizeDirPath(cwd))}` : '';
+  const prevSessionId = !newThread
+    ? ((cwdSessionKey && sessionMap?.[cwdSessionKey]) || (!cwdChanged ? sessionMap?.[agentId] : '') || '')
+    : '';
   const isReadOnly = sandbox === 'read-only';
 
   if (agentId === 'pi') {
@@ -462,6 +467,7 @@ async function executeStreamingCliAgent({
   sandbox,
   approvalPolicy,
   chosenCwd,
+  cwdChanged = false,
   roomTitle,
   sessionMap,
   newThread,
@@ -480,6 +486,7 @@ async function executeStreamingCliAgent({
     sandbox,
     approvalPolicy,
     cwd: chosenCwd,
+    cwdChanged,
     roomTitle,
     newThread,
   });
@@ -904,8 +911,10 @@ export async function runAgentTurn({
       steps: [],
     };
 
+    const cwdChanged = Boolean(prevMeta.cwd && toPathKey(normalizeDirPath(prevMeta.cwd)) !== toPathKey(chosenCwd));
+
     writeMeta(safeConv, {
-      ...(persistPrefs ? { activeAgent: normalizedAgent, effort, cwd: chosenCwd } : { cwd: prevMeta.cwd || chosenCwd }),
+      ...(persistPrefs ? { activeAgent: normalizedAgent, effort, cwd: chosenCwd } : { cwd: chosenCwd }),
       status: 'thinking',
       activeTurn,
       lastError: null,
@@ -923,6 +932,7 @@ export async function runAgentTurn({
       sandbox,
       approvalPolicy,
       chosenCwd,
+      cwdChanged,
       roomTitle,
       sessionMap: prevMeta.agentSessions || {},
       newThread,
@@ -954,7 +964,10 @@ export async function runAgentTurn({
     }, { expectedEpoch: roomEpoch, requireExists: true });
 
     const nextSessions = { ...(readMeta(safeConv).agentSessions || {}) };
-    if (result.sessionId) nextSessions[normalizedAgent] = result.sessionId;
+    if (result.sessionId) {
+      nextSessions[normalizedAgent] = result.sessionId;
+      nextSessions[`${normalizedAgent}:${toPathKey(chosenCwd)}`] = result.sessionId;
+    }
 
     const finalMeta = releaseRoomTurnLease(safeConv, leaseId, {
       agentSessions: nextSessions,
@@ -1055,7 +1068,7 @@ export async function runCouncilTurn({
         return `${id}${st === 'done' ? ' ✓' : st === 'err' ? ' ✖' : '…'}`;
       }).join(' · ');
       writeMeta(safeConv, {
-        cwd: prevMeta.cwd || chosenCwd,
+        cwd: chosenCwd,
         status: 'thinking',
         activeTurn: {
           id: `council_${startedAt}`,
